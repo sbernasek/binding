@@ -44,7 +44,7 @@ class Equilibrium:
         return np.exp(-dG/(self.RT))
 
 
-class ConcentrationSweep:
+class Sweep:
 
     def __init__(self, cmin=0, cmax=1, density=25, names=None):
         if names is None:
@@ -55,6 +55,7 @@ class ConcentrationSweep:
         yy, xx = np.meshgrid(*(self.C,)*2)
         self.concentrations = np.stack((xx, yy)).reshape(2, -1).T
         self.ets = None
+        self.Ns = None
 
     def set_occupancies(self, microstates, method='c'):
         """ Get Ns x Nc x b occupancy array. """
@@ -67,8 +68,10 @@ class ConcentrationSweep:
 
         self.total_occupancy = self.occupancies[:,:,1:].sum(axis=-1)
         self.ets = np.array([i for i, x in enumerate(microstates.ets) if x == 1]).reshape(-1, 1)
+        self.Ns = microstates.Ns
 
-    def plot_site_occupancy(self, site=0, species='Pnt', **kwargs):
+    def plot_occupancy(self, site=0, species='Pnt', **kwargs):
+        """ Plot occupancy for an individual binding site. """
         if species.lower() == 'total':
             zz = 1 - self.occupancies[site, :, 0].reshape(*(self.density,)*2)
         else:
@@ -79,9 +82,10 @@ class ConcentrationSweep:
         return fig
 
     def plot_overall_occupancy(self, species='Pnt', mask=None, title=False, **kwargs):
+        """ Plot overall occupancy across the entire element. """
 
         # get total occupancy
-        total = zz = 1 - self.occupancies[:, :, 0].mean(axis=0).reshape(*(self.density,)*2)
+        total = 1 - self.occupancies[:, :, 0].mean(axis=0).reshape(*(self.density,)*2)
         if mask is not None:
             mask = total
 
@@ -218,8 +222,8 @@ class ConcentrationSweep:
         fig.suptitle('Fixed {:0.1f} nM {:s}'.format(fixed_concentration, fixed_species), fontsize=9)
 
         # calculate distance to nearest ets site
-        N = self.occupancies.shape[0]
-        proximity = distance_matrix(np.arange(N).reshape(-1, 1), self.ets).min(axis=1)
+        sites = np.arange(self.Ns)
+        proximity = distance_matrix(sites.reshape(-1, 1), self.ets).min(axis=1)
         norm = Normalize(vmin=0, vmax=proximity.max())
 
         # visualize binding sites, colored by proximity to ets site
@@ -228,7 +232,7 @@ class ConcentrationSweep:
         ax0.grid(color='k', linestyle='-', linewidth=2)
         ax0.set_yticks([])
         ax0.xaxis.set_ticks_position('top')
-        ax0.set_xticks(np.arange(N)-0.5)
+        ax0.set_xticks(sites-0.5)
         ax0.set_xticklabels([])
         ax0.tick_params(labelsize=8, pad=0)
 
@@ -244,7 +248,6 @@ class ConcentrationSweep:
         ax1.set_xlabel('{:s} concentration (nM)'.format(variable), fontsize=8)
 
         return fig, cmap, norm
-
 
     def add_contour(self, ax, species='Pnt', variable='Pnt', fixed=0, overall=True, color='r'):
 
@@ -267,3 +270,55 @@ class ConcentrationSweep:
                 ax1.plot(concentration, x, '-', color=color)
 
         return ax
+
+
+class AggregateSweep(Sweep):
+
+    def set_occupancies(self, microstates):
+        """ Get Nc x b occupancy array. """
+        pf = PartitionFunction(microstates, self.C)
+        self.occupancies = pf.c_get_overall_occupancies()
+        self.total_occupancy = self.occupancies[:, 1:].sum(axis=-1)
+        self.ets = np.array([i for i, x in enumerate(microstates.ets) if x == 1]).reshape(-1, 1)
+        self.Ns = microstates.Ns
+
+    def plot_occupancy(self, species='Pnt', mask=None, title=False, **kwargs):
+        """ Plot overall occupancy across the entire element. """
+
+        # get total occupancy
+        total = 1 - self.occupancies[:, 0].reshape(*(self.density,)*2)
+        if mask is not None:
+            mask = total
+
+        if species.lower() == 'total':
+            zz = total
+        else:
+            zz = self.occupancies[:, self.names[species]].reshape(*(self.density,)*2)
+
+        fig = self.show(zz, species, mask=mask, **kwargs)
+        if title:
+            fig.suptitle('Over all sites', fontsize=9)
+        return fig
+
+    def plot_overall_occupancy(self, **kwargs):
+        """ Plot overall occupancy across the entire element. """
+        return self.plot_occupancy(**kwargs)
+
+    def add_contour(self, ax, species='Pnt', variable='Pnt', fixed=0, color='r'):
+
+        # get data
+        species_dim = self.names[species]
+        variable_dim = self.names[variable]-1
+        if variable_dim == 0:
+            occupancy = self.occupancies[:, species_dim].reshape(self.density, self.density)[:, fixed]
+            concentration = self.concentrations[:, variable_dim].reshape(self.density, self.density)[:, fixed] * 1e9
+        elif variable_dim == 1:
+            occupancy = self.occupancies[:, species_dim].reshape(self.density, self.density)[fixed, :]
+            concentration = self.concentrations[:, variable_dim].reshape(self.density, self.density)[fixed, :] * 1e9
+
+        # plot occupancy contour(s)
+        ax.plot(concentration, occupancy, '-', color=color)
+
+        return ax
+
+

@@ -24,6 +24,7 @@ cdef class cMicrostates:
     cdef array a
     cdef array G
     cdef array E
+    #cdef array masks
 
     def __init__(self, unsigned int Ns,
                  unsigned int N_species,
@@ -49,12 +50,14 @@ cdef class cMicrostates:
         self.ets = ets
 
         # initialize occupancy counts and microstate energies
-        self.a = clone(array('I'), self.Nm * N_species, True)
+        self.a = clone(array('I'), N_species*self.Nm, True)
         self.G = clone(array('d'), self.Nm, True)
+        #self.masks = clone(array('I'), self.Nm*(self.b-1)*self.Ns, True)
 
         # enumerate microstates and evaluate partition functions
         self.set_ground_states()
-        self.set_microstate_energies()
+        self.set_energies()
+        #self.set_microstate_energies()
 
         self.E = clone(array('d'), self.Nm, True)
         for index in xrange(self.Nm):
@@ -73,6 +76,9 @@ cdef class cMicrostates:
         """ Returns microstate energies as np array. """
         return np.array(self.E, dtype=np.float64).reshape(self.Nm)
 
+    cpdef np.ndarray get_masks(self):
+        return np.array(self.masks, dtype=np.uint32).reshape((self.Nm, self.b-1, self.Ns))
+
     cdef void set_params(self, dict params):
         cdef unsigned int index
         for index in xrange(self.b-1):
@@ -90,11 +96,12 @@ cdef class cMicrostates:
             # check if ETS site
             energy = self.get_binding_energy(0, index)
 
-            # set binding energy
-            self.G.data.as_doubles[index] = energy
+            # set activity and binding energy
             self.a.data.as_uints[(index-1)*(self.Nm) +  index] = 1
+            self.G.data.as_doubles[index] = energy
+            #self.masks.data.as_uints[(index-1)*(self.b-1)*self.Ns + (index-1)*self.Ns] = 1
 
-    cdef double get_binding_energy(self, unsigned int site_index, unsigned int site_state):
+    cdef double get_binding_energy(self, unsigned int site_index, unsigned int site_state) nogil:
         """ Get binding energy for single site. """
         cdef double energy
         if self.ets.data.as_uints[site_index] == 1:
@@ -103,33 +110,95 @@ cdef class cMicrostates:
             energy = self.beta.data.as_doubles[site_state-1]
         return energy
 
-    cdef void set_microstate_energies(self):
-        cdef unsigned int j, k
-        cdef array microstate
-        cdef double binding_energy
-        cdef unsigned int n, site_state, neighbor
+    cdef void set_energies(self) nogil:
+        cdef unsigned int base, site_state
+        cdef unsigned int a1, a2
+        cdef double G
 
-        # update higher order elements
-        for k in xrange(self.b, self.Nm):
+        for base in xrange(self.b):
 
-            # TODO: could transpose A for speed
+            # initialize activity and binding energy
+            a1 = self.a.data.as_uints[0*self.Nm + base]
+            a2 = self.a.data.as_uints[1*self.Nm + base]
+            G = self.G.data.as_doubles[base]
+
+            # run recursion
+            for site_state in xrange(self.b):
+                self.set_energy(1, site_state, base, base, a1, a2, G)
+
+    cdef void set_energy(self,
+                          unsigned int site_index,
+                          unsigned int site_state,
+                          unsigned int neighbor_microstate,
+                          unsigned int neighbor_state,
+                          unsigned int a1, unsigned int a2, double G) nogil:
+
+        cdef unsigned int microstate
+        #cdef unsigned int neighbor_row, row, index
+
+        # if site is unoccupied, skip it
+        if site_state != 0:
+
             # get microstate
-            n, microstate = get_ternary_repr(k) # note there are n+1 digits
-            site_state = microstate.data.as_uints[n]
-            binding_energy = self.get_binding_energy(n, site_state)
+            microstate = neighbor_microstate + site_state*(self.b**site_index)
 
-            # assign activities
-            for j in xrange(self.b-1):
-                self.a.data.as_uints[j*self.Nm + k] = microstate.count(j+1)
+            # set G
+            G += self.get_binding_energy(site_index, site_state)
+            if site_state == neighbor_state:
+                G += self.gamma.data.as_doubles[site_state-1]
+            self.G.data.as_doubles[microstate] = G
 
-            # compute energy by incrementing N-1 neighbor's energy
-            neighbor = c_bits_to_int(microstate, n)
-            self.G.data.as_doubles[k] = self.G.data.as_doubles[neighbor] + binding_energy
+            # # copy mask
+            # neighbor_row = neighbor_microstate*(self.b-1)*self.Ns
+            # row = microstate*(self.b-1)*self.Ns
+            # for index in xrange(site_index):
+            #     self.masks.data.as_uints[row + index] = self.masks.data.as_uints[neighbor_row + index]
+            #     self.masks.data.as_uints[row + self.Ns + index] = self.masks.data.as_uints[neighbor_row + self.Ns + index]
 
-            # if N-1 neighbor shares same occupant, add gamma
-            if site_state == microstate.data.as_uints[n-1]:
-                if site_state != 0:
-                    self.G.data.as_doubles[k] += self.gamma.data.as_doubles[site_state-1]
+            # set a
+            if site_state == 1:
+                a1 += 1
+                #self.masks.data.as_uints[row + site_index] = 1
+            else:
+                a2 += 1
+                #self.masks.data.as_uints[row + self.Ns + site_index] = 1
+            self.a.data.as_uints[0*self.Nm + microstate] = a1
+            self.a.data.as_uints[1*self.Nm + microstate] = a2
+
+        # recurse
+        if site_index < (self.Ns - 1):
+            neighbor_state = site_state
+            for site_state in xrange(self.b):
+                self.set_energy(site_index+1, site_state, microstate, neighbor_state, a1, a2, G)
+
+
+    # cdef void set_microstate_energies(self):
+    #     cdef unsigned int j, k
+    #     cdef array microstate
+    #     cdef double binding_energy
+    #     cdef unsigned int n, site_state, neighbor
+
+    #     # update higher order elements
+    #     for k in xrange(self.b, self.Nm):
+
+    #         # TODO: could transpose A for speed
+    #         # get microstate
+    #         n, microstate = get_ternary_repr(k) # note there are n+1 digits
+    #         site_state = microstate.data.as_uints[n]
+    #         binding_energy = self.get_binding_energy(n, site_state)
+
+    #         # assign activities
+    #         for j in xrange(self.b-1):
+    #             self.a.data.as_uints[j*self.Nm + k] = microstate.count(j+1)
+
+    #         # compute energy by incrementing N-1 neighbor's energy
+    #         neighbor = c_bits_to_int(microstate, n)
+    #         self.G.data.as_doubles[k] = self.G.data.as_doubles[neighbor] + binding_energy
+
+    #         # if N-1 neighbor shares same occupant, add gamma
+    #         if site_state == microstate.data.as_uints[n-1]:
+    #             if site_state != 0:
+    #                 self.G.data.as_doubles[k] += self.gamma.data.as_doubles[site_state-1]
 
     cpdef tuple get_energy_contributions(self):
         """ Returns a/b/g energy contributions to each microstate. """
@@ -241,8 +310,11 @@ cdef class cPartitionFunction:
 
         self.C = array('d', concentrations)
         self.set_energies(microstates)
+
+        # set occupancy mask
         masks = microstates.get_masks()[:, :-1, :]
         self.Nmasks = (self.b-1)*self.Ns*(self.b**(self.Ns-1))
+
         m_ind, b_ind, s_ind = masks.nonzero()
         self.m_ind = array('I', m_ind)
         self.b_ind = array('I', b_ind)
@@ -253,15 +325,15 @@ cdef class cPartitionFunction:
         cdef cMicrostates ms = microstates.get_c_microstates()
         self.a = ms.a
         self.E = ms.E
+        #self.masks = ms.masks
 
     cpdef array get_occupancies(self):
         """ Get flattened Nc x b x Ns occupancy array. """
-        #cdef array occupancies = clone(array('d'),self.Nc*self.b*self.Ns, True)
         cdef array occupancies = clone(array('d'),self.Nc*(self.b-1)*self.Ns, True)
         cdef array probabilities = clone(array('d'), self.Nm, True)
         cdef array activities = clone(array('d'), self.density*self.n*self.Nm, False)
         self.c_preallocate_activities(activities)
-        self.set_occupancy(activities, probabilities, occupancies)
+        self.set_occupancies(activities, probabilities, occupancies)
         return occupancies
 
     cpdef array get_probabilities(self):
@@ -276,7 +348,7 @@ cdef class cPartitionFunction:
         self.c_preallocate_activities(activities)
         return activities
 
-    cdef void c_preallocate_activities(self, array activity) with gil:
+    cdef void c_preallocate_activities(self, array activity) nogil:
         """ Get preallocated activity array. (used) """
 
         cdef int i, j, k
@@ -332,7 +404,7 @@ cdef class cPartitionFunction:
 
     @cython.boundscheck(False)
     @cython.wraparound(False)
-    cdef void set_probabilities(self, array activities, array probabilities, int ind) with gil:
+    cdef void set_probabilities(self, array activities, array probabilities, int ind) nogil:
         """ Preallocate microstate probabilities """
 
         cdef int i
@@ -355,16 +427,14 @@ cdef class cPartitionFunction:
 
     @cython.boundscheck(False)
     @cython.wraparound(False)
-    cdef void set_occupancy(self, array activities,
+    cdef void set_occupancies(self, array activities,
                                 array probabilities,
-                                array occupancies) with gil:
+                                array occupancies) nogil:
         cdef unsigned int i, j, k, l, row
         cdef double p
-        #cdef unsigned int size = self.Nm * self.Ns
 
         # iterate across concentrations
         for i in xrange(self.Nc):
-            #row = i*self.b*self.Ns
             row = i*(self.b-1)*self.Ns
             self.set_probabilities(activities, probabilities, i)
 
@@ -377,9 +447,62 @@ cdef class cPartitionFunction:
                 occupancies.data.as_doubles[row + k*self.Ns + l] += p
 
 
+cdef class cOverallPartitionFunction(cPartitionFunction):
+
+    def __init__(self, microstates, concentrations):
+        self.Ns = microstates.Ns
+        self.Nc = concentrations.size ** 2
+        self.Nm = microstates.Nm
+        self.b = microstates.b
+        self.n = microstates.b-1
+        self.density = concentrations.size
+
+        self.C = array('d', concentrations)
+        self.set_energies(microstates)
+
+        # set occupancy mask
+        masks = microstates.get_masks()[:, 1:, :]
+        masks = np.any(masks, axis=-1)
+        self.Nmasks = self.n * (self.Nm - (self.n**self.Ns))
+        b_ind, m_ind = masks.T.nonzero()
+        self.m_ind = array('I', m_ind)
+        self.b_ind = array('I', b_ind)
+
+    cpdef array get_occupancies(self):
+        """ Get flattened Nc x b overall occupancy array. """
+
+        cdef array occupancies = clone(array('d'), self.Nc*self.n, True)
+        cdef array probabilities = clone(array('d'), self.Nm, True)
+        cdef array activities = clone(array('d'), self.density*self.n*self.Nm, False)
+        self.c_preallocate_activities(activities)
+        self.set_occupancies(activities, probabilities, occupancies)
+        return occupancies
+
+    @cython.boundscheck(False)
+    @cython.wraparound(False)
+    cdef void set_occupancies(self, array activities,
+                                array probabilities,
+                                array occupancies) nogil:
+        cdef unsigned int i, j, k, row
+        cdef double p, ms_occupancy
+        cdef unsigned int sites_bound
+
+        # iterate across concentrations
+        for i in xrange(self.Nc):
+            row = i*self.n
+            self.set_probabilities(activities, probabilities, i)
+
+            # iterate over unmasked sites
+            for index in xrange(self.Nmasks):
+                j = self.m_ind.data.as_uints[index]
+                k = self.b_ind.data.as_uints[index]
+                p = probabilities.data.as_doubles[j]
+                sites_bound = self.a.data.as_uints[k*self.Nm + j]
+                occupancies.data.as_doubles[row + k] += (p * sites_bound)
+
+
 class PartitionFunction:
     def __init__(self, microstates, concentrations):
-        self.c_pf = cPartitionFunction(microstates, concentrations)
 
         # get system dimensions
         self.Nc = concentrations.size ** 2
@@ -392,15 +515,32 @@ class PartitionFunction:
         self.microstates = microstates
         self.concentrations = concentrations
 
-    def c_get_occupancies(self):
-        """ Get Nc x b x Ns occupancy array. """
-        # shape = (self.Nc, self.b, self.Ns)
-        # occupancies = self.c_pf.get_occupancies()
-        # return np.array(occupancies, dtype=np.float64).reshape(*shape)
-        shape = (self.Nc, self.b-1, self.Ns)
+    def c_get_overall_occupancies(self):
+        """ Get Nc x b occupancy array. """
+
+        c_pf = cOverallPartitionFunction(self.microstates, self.concentrations)
 
         # convert array to ndarray
-        c_occupancies = self.c_pf.get_occupancies()
+        shape = (self.Nc, self.b-1)
+        c_occupancies = c_pf.get_occupancies()
+        occupancies = np.array(c_occupancies, dtype=np.float64).reshape(*shape)
+        occupancies = occupancies / self.Ns
+
+        # append balance
+        balance = (1 - occupancies.sum(axis=1)).reshape(self.Nc, 1)
+        occupancies = np.append(balance, occupancies, axis=1)
+
+        return occupancies
+
+    def c_get_occupancies(self):
+        """ Get Nc x b x Ns occupancy array. """
+
+        # instantiate partition function
+        c_pf = cPartitionFunction(self.microstates, self.concentrations)
+
+        # convert array to ndarray
+        shape = (self.Nc, self.b-1, self.Ns)
+        c_occupancies = c_pf.get_occupancies()
         occupancies = np.array(c_occupancies, dtype=np.float64).reshape(*shape)
 
         # append balance
@@ -472,7 +612,7 @@ cpdef unsigned int get_ternary_dim(unsigned int x):
     """ Get highest dimension of ternary representation (python interface). """
     return c_get_ternary_dim(x)
 
-cdef unsigned int c_get_ternary_dim(unsigned int x) with gil:
+cdef unsigned int c_get_ternary_dim(unsigned int x) nogil:
     """ Get highest dimension of ternary representation (cython only). """
     cdef unsigned int n = 0
     while x // (3**(n+1)) > 0:
@@ -486,7 +626,7 @@ cpdef tuple get_ternary_repr(unsigned int x):
     c_set_ternary_bits(x, n, bits)
     return (n, bits)
 
-cdef void c_set_ternary_bits(unsigned int x, int n, array bits) with gil:
+cdef void c_set_ternary_bits(unsigned int x, int n, array bits) nogil:
     """ Sets ternary bit values. """
     cdef unsigned int base, num
 
@@ -498,7 +638,7 @@ cdef void c_set_ternary_bits(unsigned int x, int n, array bits) with gil:
         x -= num*base
         n -= 1
 
-cdef unsigned int c_bits_to_int(array bits, unsigned int n, unsigned int base=3) with gil:
+cdef unsigned int c_bits_to_int(array bits, unsigned int n, unsigned int base=3) nogil:
     """ Converts bits to integer value (cython only). """
     cdef unsigned int index
     cdef unsigned int k = 0
