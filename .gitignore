@@ -1,7 +1,8 @@
+profiling/*
 modules/build/*
 *.pyc
 *.pptx
 *.c
 *.so
 *.h
-notebooks/ipynb_checkpoints/*
+notebooks/.ipynb_checkpoints/*

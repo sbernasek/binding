@@ -33,6 +33,17 @@ plt.rcParams['ytick.labelsize'] = 7
 plt.rcParams['ytick.direction'] = 'in'
 
 
+class Equilibrium:
+    def __init__(self, T=300, R=1.987204118*1E-3):
+        self.RT = R*T
+
+    def get_dG(self, K):
+        return -self.RT*np.log(K)
+
+    def get_K(self, dG):
+        return np.exp(-dG/(self.RT))
+
+
 class ConcentrationSweep:
 
     def __init__(self, cmin=0, cmax=1, density=25, names=None):
