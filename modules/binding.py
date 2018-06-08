@@ -6,7 +6,7 @@ from matplotlib import gridspec
 from matplotlib.ticker import FormatStrFormatter
 from scipy.spatial import distance_matrix
 
-from partitions import PartitionFunction, cMicrostates
+from partitions import PartitionFunction
 
 tickpad=2
 plt.rcParams['font.family'] = 'sans-serif'

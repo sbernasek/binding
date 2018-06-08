@@ -1,6 +1,6 @@
 # cython: boundscheck=False
 # cython: wraparound=False
-# cython: profile=False
+# cython: profile=True
 
 import cython
 import numpy as np
@@ -220,6 +220,7 @@ class Microstates:
 
 cdef class cPartitionFunction:
     cdef int Ns, Nc, Nm, b, n
+    cdef unsigned int Nmasks
     cdef int density
     cdef array C
     cdef array a
@@ -240,7 +241,8 @@ cdef class cPartitionFunction:
 
         self.C = array('d', concentrations)
         self.set_energies(microstates)
-        masks = microstates.get_masks()
+        masks = microstates.get_masks()[:, :-1, :]
+        self.Nmasks = (self.b-1)*self.Ns*(self.b**(self.Ns-1))
         m_ind, b_ind, s_ind = masks.nonzero()
         self.m_ind = array('I', m_ind)
         self.b_ind = array('I', b_ind)
@@ -254,7 +256,8 @@ cdef class cPartitionFunction:
 
     cpdef array get_occupancies(self):
         """ Get flattened Nc x b x Ns occupancy array. """
-        cdef array occupancies = clone(array('d'),self.Nc*self.b*self.Ns, True)
+        #cdef array occupancies = clone(array('d'),self.Nc*self.b*self.Ns, True)
+        cdef array occupancies = clone(array('d'),self.Nc*(self.b-1)*self.Ns, True)
         cdef array probabilities = clone(array('d'), self.Nm, True)
         cdef array activities = clone(array('d'), self.density*self.n*self.Nm, False)
         self.c_preallocate_activities(activities)
@@ -273,7 +276,7 @@ cdef class cPartitionFunction:
         self.c_preallocate_activities(activities)
         return activities
 
-    cdef void c_preallocate_activities(self, array activity) nogil:
+    cdef void c_preallocate_activities(self, array activity) with gil:
         """ Get preallocated activity array. (used) """
 
         cdef int i, j, k
@@ -329,7 +332,7 @@ cdef class cPartitionFunction:
 
     @cython.boundscheck(False)
     @cython.wraparound(False)
-    cdef void set_probabilities(self, array activities, array probabilities, int ind) nogil:
+    cdef void set_probabilities(self, array activities, array probabilities, int ind) with gil:
         """ Preallocate microstate probabilities """
 
         cdef int i
@@ -354,18 +357,19 @@ cdef class cPartitionFunction:
     @cython.wraparound(False)
     cdef void set_occupancy(self, array activities,
                                 array probabilities,
-                                array occupancies) nogil:
+                                array occupancies) with gil:
         cdef unsigned int i, j, k, l, row
         cdef double p
-        cdef unsigned int size = self.Nm * self.Ns
+        #cdef unsigned int size = self.Nm * self.Ns
 
         # iterate across concentrations
         for i in xrange(self.Nc):
-            row = i*self.b*self.Ns
+            #row = i*self.b*self.Ns
+            row = i*(self.b-1)*self.Ns
             self.set_probabilities(activities, probabilities, i)
 
             # iterate over unmasked sites
-            for index in xrange(size):
+            for index in xrange(self.Nmasks):
                 j = self.m_ind.data.as_uints[index]
                 k = self.b_ind.data.as_uints[index]
                 l = self.s_ind.data.as_uints[index]
@@ -390,9 +394,20 @@ class PartitionFunction:
 
     def c_get_occupancies(self):
         """ Get Nc x b x Ns occupancy array. """
-        shape = (self.Nc, self.b, self.Ns)
-        occupancies = self.c_pf.get_occupancies()
-        return np.array(occupancies, dtype=np.float64).reshape(*shape)
+        # shape = (self.Nc, self.b, self.Ns)
+        # occupancies = self.c_pf.get_occupancies()
+        # return np.array(occupancies, dtype=np.float64).reshape(*shape)
+        shape = (self.Nc, self.b-1, self.Ns)
+
+        # convert array to ndarray
+        c_occupancies = self.c_pf.get_occupancies()
+        occupancies = np.array(c_occupancies, dtype=np.float64).reshape(*shape)
+
+        # append balance
+        balance = (1 - occupancies.sum(axis=1)).reshape(self.Nc, 1, self.Ns)
+        occupancies = np.append(occupancies, balance, axis=1)
+
+        return occupancies
 
     def preallocate_probabilities(self):
         """ Preallocate microstate probabilities """
@@ -457,7 +472,7 @@ cpdef unsigned int get_ternary_dim(unsigned int x):
     """ Get highest dimension of ternary representation (python interface). """
     return c_get_ternary_dim(x)
 
-cdef unsigned int c_get_ternary_dim(unsigned int x) nogil:
+cdef unsigned int c_get_ternary_dim(unsigned int x) with gil:
     """ Get highest dimension of ternary representation (cython only). """
     cdef unsigned int n = 0
     while x // (3**(n+1)) > 0:
@@ -471,7 +486,7 @@ cpdef tuple get_ternary_repr(unsigned int x):
     c_set_ternary_bits(x, n, bits)
     return (n, bits)
 
-cdef void c_set_ternary_bits(unsigned int x, int n, array bits) nogil:
+cdef void c_set_ternary_bits(unsigned int x, int n, array bits) with gil:
     """ Sets ternary bit values. """
     cdef unsigned int base, num
 
@@ -483,7 +498,7 @@ cdef void c_set_ternary_bits(unsigned int x, int n, array bits) nogil:
         x -= num*base
         n -= 1
 
-cdef unsigned int c_bits_to_int(array bits, unsigned int n, unsigned int base=3) nogil:
+cdef unsigned int c_bits_to_int(array bits, unsigned int n, unsigned int base=3) with gil:
     """ Converts bits to integer value (cython only). """
     cdef unsigned int index
     cdef unsigned int k = 0
