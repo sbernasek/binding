@@ -1,3 +1,4 @@
+modules/build/*
 *.pyc
 *.pptx
 *.c

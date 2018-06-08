@@ -10,9 +10,3 @@ setup(
     include_dirs=[numpy.get_include()]
 )
 
-
-# from distutils.core import setup
-# from Cython.Build import cythonize
-
-# # run build
-# setup(ext_modules = cythonize("partitions.pyx"))
