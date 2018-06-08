@@ -1,0 +1,6 @@
+*.pyc
+*.pptx
+*.c
+*.so
+*.h
+notebooks/ipynb_checkpoints/*
