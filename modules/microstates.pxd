@@ -11,6 +11,7 @@ cdef class cMicrostates:
     # attributes
     cdef unsigned int Ns
     cdef unsigned int b
+    cdef unsigned int n
     cdef unsigned int Nm
     cdef array alpha
     cdef array beta
@@ -27,16 +28,26 @@ cdef class cMicrostates:
     cpdef np.ndarray get_E(self)
     cpdef np.ndarray get_masks(self)
     cdef void set_params(self, dict params)
-    cdef void set_ground_states(self)
-    cdef double get_binding_energy(self, unsigned int site_index, unsigned int site_state) nogil
-    cdef void set_energies(self) nogil
+    cdef double get_binding_energy(self, unsigned int site_index, unsigned int site_state) with gil
+    cdef void set_energies(self) with gil
     cdef void set_energy(self,
                           unsigned int site_index,
                           unsigned int site_state,
                           unsigned int neighbor_microstate,
                           unsigned int neighbor_state,
-                          unsigned int a1, unsigned int a2, double G) nogil
+                          unsigned int a1, unsigned int a2, double G) with gil
     cpdef tuple get_energy_contributions(self)
 
 
+cdef class cRecursiveMicrostates(cMicrostates):
+
+    # attributes
+    cdef unsigned int index
+
+    # methods
+    cdef void rset_energy(self,
+                          unsigned int site_index,
+                          unsigned int site_state,
+                          unsigned int neighbor_state,
+                          unsigned int a1, unsigned int a2, double G) with gil
 

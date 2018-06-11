@@ -25,6 +25,7 @@ cdef class cMicrostates:
         # set system size
         self.Ns = Ns
         self.b = N_species + 1
+        self.n = N_species
         self.Nm = self.b**Ns
 
         # set parameters
@@ -39,12 +40,9 @@ cdef class cMicrostates:
         # initialize occupancy counts and microstate energies
         self.a = clone(array('I'), N_species*self.Nm, True)
         self.G = clone(array('d'), self.Nm, True)
-        #self.masks = clone(array('I'), self.Nm*(self.b-1)*self.Ns, True)
 
-        # enumerate microstates and evaluate partition functions
-        self.set_ground_states()
+        # enumerate microstate energies
         self.set_energies()
-        #self.set_microstate_energies()
 
         self.E = clone(array('d'), self.Nm, True)
         for index in xrange(self.Nm):
@@ -73,22 +71,7 @@ cdef class cMicrostates:
             self.beta.data.as_doubles[index] = params['beta'][index]
             self.gamma.data.as_doubles[index] = params['gamma'][index]
 
-    cdef void set_ground_states(self):
-        """ Initialize ground states """
-        cdef unsigned int index
-        cdef double energy
-        self.G.data.as_doubles[0] = 0
-        for index in xrange(1, self.b):
-
-            # check if ETS site
-            energy = self.get_binding_energy(0, index)
-
-            # set activity and binding energy
-            self.a.data.as_uints[(index-1)*(self.Nm) +  index] = 1
-            self.G.data.as_doubles[index] = energy
-            #self.masks.data.as_uints[(index-1)*(self.b-1)*self.Ns + (index-1)*self.Ns] = 1
-
-    cdef double get_binding_energy(self, unsigned int site_index, unsigned int site_state) nogil:
+    cdef double get_binding_energy(self, unsigned int site_index, unsigned int site_state) with gil:
         """ Get binding energy for single site. """
         cdef double energy
         if self.ets.data.as_uints[site_index] == 1:
@@ -97,28 +80,19 @@ cdef class cMicrostates:
             energy = self.beta.data.as_doubles[site_state-1]
         return energy
 
-    cdef void set_energies(self) nogil:
-        cdef unsigned int base, site_state
-        cdef unsigned int a1, a2
-        cdef double G
+    cdef void set_energies(self) with gil:
+        cdef unsigned int site_state
 
-        for base in xrange(self.b):
-
-            # initialize activity and binding energy
-            a1 = self.a.data.as_uints[0*self.Nm + base]
-            a2 = self.a.data.as_uints[1*self.Nm + base]
-            G = self.G.data.as_doubles[base]
-
-            # run recursion
-            for site_state in xrange(self.b):
-                self.set_energy(1, site_state, base, base, a1, a2, G)
+        # run recursion
+        for site_state in xrange(self.b):
+            self.set_energy(0, site_state, 0, 0, 0, 0, 0)
 
     cdef void set_energy(self,
                           unsigned int site_index,
                           unsigned int site_state,
                           unsigned int neighbor_microstate,
                           unsigned int neighbor_state,
-                          unsigned int a1, unsigned int a2, double G) nogil:
+                          unsigned int a1, unsigned int a2, double G) with gil:
         """ Recursive set_energy function. """
 
         cdef unsigned int microstate
@@ -138,18 +112,15 @@ cdef class cMicrostates:
             # set a
             if site_state == 1:
                 a1 += 1
-                #self.masks.data.as_uints[row + site_index] = 1
             else:
                 a2 += 1
-                #self.masks.data.as_uints[row + self.Ns + site_index] = 1
             self.a.data.as_uints[0*self.Nm + microstate] = a1
             self.a.data.as_uints[1*self.Nm + microstate] = a2
 
         # recurse
         if site_index < (self.Ns - 1):
-            neighbor_state = site_state
-            for site_state in xrange(self.b):
-                self.set_energy(site_index+1, site_state, microstate, neighbor_state, a1, a2, G)
+            for new_state in xrange(self.b):
+                self.set_energy(site_index+1, new_state, microstate, site_state, a1, a2, G)
 
     cpdef tuple get_energy_contributions(self):
         """ Returns a/b/g energy contributions to each microstate. """
@@ -207,6 +178,52 @@ cdef class cMicrostates:
         return (a, b, g)
 
 
+cdef class cRecursiveMicrostates(cMicrostates):
+    """ Equivalent version of cMicrostates in which energy/activity arrays are ordered via recursive tree traversal. """
+
+    cdef void set_energies(self) with gil:
+        cdef unsigned int site_state
+
+        # run recursion
+        self.index = 1 # because first microstate gets skipped
+        for site_state in xrange(self.b):
+            self.rset_energy(0, site_state, 0, 0, 0, 0)
+
+    cdef void rset_energy(self,
+                          unsigned int site_index,
+                          unsigned int site_state,
+                          unsigned int neighbor_state,
+                          unsigned int a1, unsigned int a2, double G) with gil:
+        """ Recursive set_energy function. """
+        cdef unsigned int new_state
+
+        # if site is unoccupied, skip it
+        if site_state != 0:
+
+            # update G
+            G += self.get_binding_energy(site_index, site_state)
+            if site_state == neighbor_state:
+                G += self.gamma.data.as_doubles[site_state-1]
+
+            # update a
+            if site_state == 1:
+                a1 += 1
+            else:
+                a2 += 1
+
+        # recurse
+        if site_index < (self.Ns - 1):
+            for new_state in xrange(self.b):
+                self.rset_energy(site_index+1, new_state, site_state, a1, a2, G)
+
+        # store values and increment index
+        if site_state != 0:
+            self.G.data.as_doubles[self.index] = G
+            self.a.data.as_uints[self.index*self.n + 0] = a1
+            self.a.data.as_uints[self.index*self.n + 1] = a2
+            self.index += 1
+
+
 class Microstates:
     def __init__(self, Ns, N_species=2, params=None, ets=(0,)):
 
@@ -224,6 +241,9 @@ class Microstates:
 
     def get_c_microstates(self, **kwargs):
         return cMicrostates(self.Ns, self.b-1, self.params, self.ets, **kwargs)
+
+    def get_c_rmicrostates(self, **kwargs):
+        return cRecursiveMicrostates(self.Ns, self.b-1, self.params, self.ets, **kwargs)
 
     def get_mask(self, v, p, indices):
         return ((indices//(self.b**p)) % self.b) == v
