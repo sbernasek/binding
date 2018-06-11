@@ -9,296 +9,25 @@ cimport numpy as np
 from array import array
 from cpython.array cimport array, clone
 
+# import microstates
+from microstates cimport cMicrostates
+ctypedef cMicrostates cMS
 
-cdef class cMicrostates:
+
+cdef class cRecursivePF:
     cdef unsigned int Ns
-    cdef unsigned int b
+    cdef unsigned int Nc
     cdef unsigned int Nm
-
-    cdef array alpha
-    cdef array beta
-    cdef array gamma
-
-    cdef array ets
-    cdef array indices
-    cdef array a
-    cdef array G
-    cdef array E
-    #cdef array masks
-
-    def __init__(self, unsigned int Ns,
-                 unsigned int N_species,
-                 dict params,
-                 array ets,
-                 double R = 1.987204118*1E-3, double T = 300):
-
-        cdef unsigned int index
-        cdef double energy
-
-        # set system size
-        self.Ns = Ns
-        self.b = N_species + 1
-        self.Nm = self.b**Ns
-
-        # set parameters
-        self.alpha = clone(array('d'), N_species, False)
-        self.beta = clone(array('d'), N_species, False)
-        self.gamma = clone(array('d'), N_species, False)
-        self.set_params(params)
-
-        # define ETS sites
-        self.ets = ets
-
-        # initialize occupancy counts and microstate energies
-        self.a = clone(array('I'), N_species*self.Nm, True)
-        self.G = clone(array('d'), self.Nm, True)
-        #self.masks = clone(array('I'), self.Nm*(self.b-1)*self.Ns, True)
-
-        # enumerate microstates and evaluate partition functions
-        self.set_ground_states()
-        self.set_energies()
-        #self.set_microstate_energies()
-
-        self.E = clone(array('d'), self.Nm, True)
-        for index in xrange(self.Nm):
-            energy = math.exp(-self.G.data.as_doubles[index] / (R*T))
-            self.E.data.as_doubles[index] = energy
-
-    cpdef np.ndarray get_a(self):
-        """ Returns microstate TF occupancy counts as np array. """
-        return np.array(self.a, dtype=np.int64).reshape((self.b-1, self.Nm))
-
-    cpdef np.ndarray get_G(self):
-        """ Returns microstate deltaG as np array. """
-        return np.array(self.G, dtype=np.float64).reshape(self.Nm)
-
-    cpdef np.ndarray get_E(self):
-        """ Returns microstate energies as np array. """
-        return np.array(self.E, dtype=np.float64).reshape(self.Nm)
-
-    cpdef np.ndarray get_masks(self):
-        return np.array(self.masks, dtype=np.uint32).reshape((self.Nm, self.b-1, self.Ns))
-
-    cdef void set_params(self, dict params):
-        cdef unsigned int index
-        for index in xrange(self.b-1):
-            self.alpha.data.as_doubles[index] = params['alpha'][index]
-            self.beta.data.as_doubles[index] = params['beta'][index]
-            self.gamma.data.as_doubles[index] = params['gamma'][index]
-
-    cdef void set_ground_states(self):
-        """ Initialize ground states """
-        cdef unsigned int index
-        cdef double energy
-        self.G.data.as_doubles[0] = 0
-        for index in xrange(1, self.b):
-
-            # check if ETS site
-            energy = self.get_binding_energy(0, index)
-
-            # set activity and binding energy
-            self.a.data.as_uints[(index-1)*(self.Nm) +  index] = 1
-            self.G.data.as_doubles[index] = energy
-            #self.masks.data.as_uints[(index-1)*(self.b-1)*self.Ns + (index-1)*self.Ns] = 1
-
-    cdef double get_binding_energy(self, unsigned int site_index, unsigned int site_state) nogil:
-        """ Get binding energy for single site. """
-        cdef double energy
-        if self.ets.data.as_uints[site_index] == 1:
-            energy = self.alpha.data.as_doubles[site_state-1]
-        else:
-            energy = self.beta.data.as_doubles[site_state-1]
-        return energy
-
-    cdef void set_energies(self) nogil:
-        cdef unsigned int base, site_state
-        cdef unsigned int a1, a2
-        cdef double G
-
-        for base in xrange(self.b):
-
-            # initialize activity and binding energy
-            a1 = self.a.data.as_uints[0*self.Nm + base]
-            a2 = self.a.data.as_uints[1*self.Nm + base]
-            G = self.G.data.as_doubles[base]
-
-            # run recursion
-            for site_state in xrange(self.b):
-                self.set_energy(1, site_state, base, base, a1, a2, G)
-
-    cdef void set_energy(self,
-                          unsigned int site_index,
-                          unsigned int site_state,
-                          unsigned int neighbor_microstate,
-                          unsigned int neighbor_state,
-                          unsigned int a1, unsigned int a2, double G) nogil:
-
-        cdef unsigned int microstate
-        #cdef unsigned int neighbor_row, row, index
-
-        # if site is unoccupied, skip it
-        if site_state != 0:
-
-            # get microstate
-            microstate = neighbor_microstate + site_state*(self.b**site_index)
-
-            # set G
-            G += self.get_binding_energy(site_index, site_state)
-            if site_state == neighbor_state:
-                G += self.gamma.data.as_doubles[site_state-1]
-            self.G.data.as_doubles[microstate] = G
-
-            # # copy mask
-            # neighbor_row = neighbor_microstate*(self.b-1)*self.Ns
-            # row = microstate*(self.b-1)*self.Ns
-            # for index in xrange(site_index):
-            #     self.masks.data.as_uints[row + index] = self.masks.data.as_uints[neighbor_row + index]
-            #     self.masks.data.as_uints[row + self.Ns + index] = self.masks.data.as_uints[neighbor_row + self.Ns + index]
-
-            # set a
-            if site_state == 1:
-                a1 += 1
-                #self.masks.data.as_uints[row + site_index] = 1
-            else:
-                a2 += 1
-                #self.masks.data.as_uints[row + self.Ns + site_index] = 1
-            self.a.data.as_uints[0*self.Nm + microstate] = a1
-            self.a.data.as_uints[1*self.Nm + microstate] = a2
-
-        # recurse
-        if site_index < (self.Ns - 1):
-            neighbor_state = site_state
-            for site_state in xrange(self.b):
-                self.set_energy(site_index+1, site_state, microstate, neighbor_state, a1, a2, G)
-
-
-    # cdef void set_microstate_energies(self):
-    #     cdef unsigned int j, k
-    #     cdef array microstate
-    #     cdef double binding_energy
-    #     cdef unsigned int n, site_state, neighbor
-
-    #     # update higher order elements
-    #     for k in xrange(self.b, self.Nm):
-
-    #         # TODO: could transpose A for speed
-    #         # get microstate
-    #         n, microstate = get_ternary_repr(k) # note there are n+1 digits
-    #         site_state = microstate.data.as_uints[n]
-    #         binding_energy = self.get_binding_energy(n, site_state)
-
-    #         # assign activities
-    #         for j in xrange(self.b-1):
-    #             self.a.data.as_uints[j*self.Nm + k] = microstate.count(j+1)
-
-    #         # compute energy by incrementing N-1 neighbor's energy
-    #         neighbor = c_bits_to_int(microstate, n)
-    #         self.G.data.as_doubles[k] = self.G.data.as_doubles[neighbor] + binding_energy
-
-    #         # if N-1 neighbor shares same occupant, add gamma
-    #         if site_state == microstate.data.as_uints[n-1]:
-    #             if site_state != 0:
-    #                 self.G.data.as_doubles[k] += self.gamma.data.as_doubles[site_state-1]
-
-    cpdef tuple get_energy_contributions(self):
-        """ Returns a/b/g energy contributions to each microstate. """
-
-        cdef array alpha, beta, gamma
-        cdef unsigned int index
-        cdef double energy
-        cdef unsigned int j, k
-        cdef array microstate
-        cdef unsigned int n, site_state, neighbor
-
-        alpha = clone(array('d'), self.Nm*2, True)
-        beta = clone(array('d'), self.Nm*2, True)
-        gamma = clone(array('d'), self.Nm*2, True)
-
-        # SET GROUND STATES
-        for index in xrange(1, self.b):
-            if self.ets.data.as_uints[0] == 1:
-                energy = self.alpha.data.as_doubles[index-1]
-                alpha.data.as_doubles[(index-1)*self.Nm + 0] = energy
-            else:
-                energy = self.beta.data.as_doubles[index-1]
-                beta.data.as_doubles[(index-1)*self.Nm + 0] = energy
-
-        # SET ALL OTHER STATES
-        for k in xrange(self.b, self.Nm):
-
-            # get microstate
-            n, microstate = get_ternary_repr(k) # note there are n+1 digits
-            site_state = microstate.data.as_uints[n]
-
-            # add N-1 neighbor's energy
-            neighbor = c_bits_to_int(microstate, n)
-            for j in xrange(self.b-1):
-                alpha.data.as_doubles[j*self.Nm + k] += alpha.data.as_doubles[j*self.Nm + neighbor]
-                beta.data.as_doubles[j*self.Nm + k] += beta.data.as_doubles[j*self.Nm + neighbor]
-                gamma.data.as_doubles[j*self.Nm + k] += gamma.data.as_doubles[j*self.Nm + neighbor]
-
-            # add binding energy
-            if self.ets.data.as_uints[n] == 1:
-                energy = self.alpha.data.as_doubles[site_state-1]
-                alpha.data.as_doubles[(site_state-1)*self.Nm + k] += energy
-            else:
-                energy = self.beta.data.as_doubles[site_state-1]
-                beta.data.as_doubles[(site_state-1)*self.Nm + k] += energy
-
-            # if N-1 neighbor shares same occupant, add gamma
-            if site_state == microstate.data.as_uints[n-1] and site_state != 0:
-                gamma.data.as_doubles[(site_state-1)*self.Nm + k] += self.gamma.data.as_doubles[site_state-1]
-
-        a = np.array(alpha, dtype=np.float64).reshape((self.b-1, self.Nm))
-        b = np.array(beta, dtype=np.float64).reshape((self.b-1, self.Nm))
-        g = np.array(gamma, dtype=np.float64).reshape((self.b-1, self.Nm))
-
-        return (a, b, g)
-
-
-class Microstates:
-    def __init__(self, Ns, N_species=2, params=None, ets=(0,)):
-
-        # set system size
-        self.Ns = Ns
-        self.b = N_species + 1
-        self.Nm = self.b**Ns
-        self.params = params
-
-        # set ets sites
-        site_indices = np.zeros(int(Ns), dtype=np.uint8)
-        for i in ets:
-            site_indices[int(i)] = 1
-        self.ets = array('I', site_indices)
-
-    def get_c_microstates(self, **kwargs):
-        return cMicrostates(self.Ns, self.b-1, self.params, self.ets, **kwargs)
-
-    def get_mask(self, v, p, indices):
-        return ((indices//(self.b**p)) % self.b) == v
-
-    def get_masks(self):
-        """ Returns boolean masks in Nm x b x Ns array. """
-        indices = np.arange(self.Nm)
-        masks = np.zeros((self.Nm, self.b, self.Ns), dtype=bool)
-        for k in range(self.Ns):
-            for j in range(self.b):
-                masks[:, j, k] = self.get_mask(j, k, indices)
-        return masks
-
-
-cdef class cPartitionFunction:
-    cdef int Ns, Nc, Nm, b, n
-    cdef unsigned int Nmasks
-    cdef int density
+    cdef unsigned int b
+    cdef unsigned int n
+    cdef unsigned int density
     cdef array C
     cdef array a
     cdef array m
     cdef array E
-
-    cdef array m_ind
-    cdef array b_ind
-    cdef array s_ind
+    cdef array activities
+    cdef array probabilities
+    cdef array occupancies
 
     def __init__(self, microstates, concentrations):
         self.Ns = microstates.Ns
@@ -307,34 +36,28 @@ cdef class cPartitionFunction:
         self.b = microstates.b
         self.n = microstates.b-1
         self.density = concentrations.size
-
         self.C = array('d', concentrations)
         self.set_energies(microstates)
+        self.activities = clone(array('d'), self.density*self.n*self.Nm, False)
+        self.reset()
 
-        # set occupancy mask
-        masks = microstates.get_masks()[:, :-1, :]
-        self.Nmasks = (self.b-1)*self.Ns*(self.b**(self.Ns-1))
+    cdef void reset(self):
+        """ Initialize probabilities and occupancies with zeros. """
+        self.probabilities = clone(array('d'), self.Nm, True)
+        self.occupancies = clone(array('d'),self.Nc*self.n*self.Ns, True)
 
-        m_ind, b_ind, s_ind = masks.nonzero()
-        self.m_ind = array('I', m_ind)
-        self.b_ind = array('I', b_ind)
-        self.s_ind = array('I', s_ind)
-
-    cpdef void set_energies(self, microstates):
+    cdef void set_energies(self, microstates):
         """ Set microstate energies. """
-        cdef cMicrostates ms = microstates.get_c_microstates()
+        cdef cMS ms = microstates.get_c_microstates()
         self.a = ms.a
         self.E = ms.E
-        #self.masks = ms.masks
 
     cpdef array get_occupancies(self):
         """ Get flattened Nc x b x Ns occupancy array. """
-        cdef array occupancies = clone(array('d'),self.Nc*(self.b-1)*self.Ns, True)
-        cdef array probabilities = clone(array('d'), self.Nm, True)
-        cdef array activities = clone(array('d'), self.density*self.n*self.Nm, False)
-        self.c_preallocate_activities(activities)
-        self.set_occupancies(activities, probabilities, occupancies)
-        return occupancies
+        self.reset()
+        self.preallocate_activities()
+        self.set_occupancies()
+        return self.occupancies
 
     cpdef array get_probabilities(self):
         """ Get preallocated Nc x Nm probability array. (not used) """
@@ -342,11 +65,9 @@ cdef class cPartitionFunction:
         activities = self.preallocate_activities()
         return self.preallocate_probabilities(activities)
 
-    cpdef array preallocate_activities(self):
+    cpdef void preallocate_activities(self):
         """ Get preallocated activity array. (python interface) """
-        cdef array activities = clone(array('d'), self.density*self.n*self.Nm, False)
-        self.c_preallocate_activities(activities)
-        return activities
+        self.c_preallocate_activities(self.activities)
 
     cdef void c_preallocate_activities(self, array activity) nogil:
         """ Get preallocated activity array. (used) """
@@ -368,6 +89,8 @@ cdef class cPartitionFunction:
                     a = self.a.data.as_uints[a_col + k]
                     activity.data.as_doubles[a_row + a_col + k] = C**a
 
+    @cython.boundscheck(False)
+    @cython.wraparound(False)
     cdef array c_preallocate_probabilities(self, array activities):
         """ Get preallocated Nc x Nm probability array. (not used) """
 
@@ -404,8 +127,8 @@ cdef class cPartitionFunction:
 
     @cython.boundscheck(False)
     @cython.wraparound(False)
-    cdef void set_probabilities(self, array activities, array probabilities, int ind) nogil:
-        """ Preallocate microstate probabilities """
+    cdef void set_probabilities(self, int ind) nogil:
+        """ Preallocate microstate probabilities for given concentration. """
 
         cdef int i
         cdef int c0 = ind // self.density
@@ -416,89 +139,145 @@ cdef class cPartitionFunction:
         cdef double total_energy = 0
 
         for i in xrange(self.Nm):
-            a0 = activities.data.as_doubles[row0 + i]
-            a1 = activities.data.as_doubles[row1 + i]
+            a0 = self.activities.data.as_doubles[row0 + i]
+            a1 = self.activities.data.as_doubles[row1 + i]
             energy = self.E.data.as_doubles[i] * a0 * a1
-            probabilities.data.as_doubles[i] = energy
+            self.probabilities.data.as_doubles[i] = energy
             total_energy += energy
 
         for i in xrange(self.Nm):
-            probabilities.data.as_doubles[i] /= total_energy
+            energy = self.probabilities.data.as_doubles[i]
+            self.probabilities.data.as_doubles[i] = energy / total_energy
 
     @cython.boundscheck(False)
     @cython.wraparound(False)
-    cdef void set_occupancies(self, array activities,
-                                array probabilities,
-                                array occupancies) nogil:
-        cdef unsigned int i, j, k, l, row
+    cdef void set_occupancies(self) nogil:
+        cdef unsigned int c_index, state, row
         cdef double p
 
         # iterate across concentrations
+        for c_index in xrange(self.Nc):
+            row = c_index*self.n*self.Ns
+            self.set_probabilities(c_index)
+
+            # run recursion
+            for state in xrange(self.b):
+                p = self.set_occupancy(0, state, 0, row)
+
+    @cython.boundscheck(False)
+    @cython.wraparound(False)
+    cdef double set_occupancy(self,
+                          unsigned int site_index,
+                          unsigned int site_state,
+                          unsigned int neighbor_microstate,
+                          unsigned int row) nogil:
+
+        cdef unsigned int microstate, column
+        cdef unsigned int neighbor_state
+        cdef double p = 0
+        cdef double occupancy
+
+        # get microstate
+        microstate = neighbor_microstate + site_state*(self.b**site_index)
+
+        # recurse
+        if site_index < (self.Ns - 1):
+            for neighbor_state in xrange(self.b):
+                p += self.set_occupancy(site_index+1, neighbor_state, microstate, row)
+
+        # if site is unoccupied, don't make an assignment but continue
+        if site_state != 0:
+
+            # add probability for current state
+            p += self.probabilities.data.as_doubles[microstate]
+
+            # assign probabilities to current site/occupant pair
+            column = (site_state-1)*self.Ns
+            occupancy = self.occupancies.data.as_doubles[row+column+site_index]
+            self.occupancies.data.as_doubles[row+column+site_index] = occupancy+ p
+
+        return p
+
+
+cdef class cIterativePF(cRecursivePF):
+    cdef unsigned int Nmasks
+    cdef array m_ind
+    cdef array b_ind
+    cdef array s_ind
+
+    def __init__(self, microstates, concentrations):
+        cRecursivePF.__init__(self, microstates, concentrations)
+        self.set_masks(microstates)
+
+    cpdef void set_masks(self, microstates):
+        """ Set occupancy masks. """
+
+        # set mask dimension
+        self.Nmasks = self.n*self.Ns*(self.b**(self.Ns-1))
+
+        # set masks
+        masks = microstates.get_masks()[:, 1:, :]
+        m_ind, b_ind, s_ind = masks.nonzero()
+        self.m_ind = array('I', m_ind)
+        self.b_ind = array('I', b_ind)
+        self.s_ind = array('I', s_ind)
+
+    @cython.boundscheck(False)
+    @cython.wraparound(False)
+    cdef void set_occupancies(self) nogil:
+        cdef unsigned int i, j, k, l, row
+        cdef double p, occupancy
+
+        # iterate across concentrations
         for i in xrange(self.Nc):
-            row = i*(self.b-1)*self.Ns
-            self.set_probabilities(activities, probabilities, i)
+            row = i*self.n*self.Ns
+            self.set_probabilities(i)
 
             # iterate over unmasked sites
             for index in xrange(self.Nmasks):
                 j = self.m_ind.data.as_uints[index]
                 k = self.b_ind.data.as_uints[index]
                 l = self.s_ind.data.as_uints[index]
-                p = probabilities.data.as_doubles[j]
-                occupancies.data.as_doubles[row + k*self.Ns + l] += p
+                p = self.probabilities.data.as_doubles[j]
+                occupancy = self.occupancies.data.as_doubles[row+k*self.Ns+l]
+                self.occupancies.data.as_doubles[row+k*self.Ns+l] = occupancy+p
 
 
-cdef class cOverallPartitionFunction(cPartitionFunction):
+cdef class cOverallPF(cIterativePF):
 
-    def __init__(self, microstates, concentrations):
-        self.Ns = microstates.Ns
-        self.Nc = concentrations.size ** 2
-        self.Nm = microstates.Nm
-        self.b = microstates.b
-        self.n = microstates.b-1
-        self.density = concentrations.size
+    cdef void reset(self):
+        """ Initialize probabilities and occupancies with zeros. """
+        self.probabilities = clone(array('d'), self.Nm, True)
+        self.occupancies = clone(array('d'),self.Nc*self.n, True)
 
-        self.C = array('d', concentrations)
-        self.set_energies(microstates)
-
-        # set occupancy mask
-        masks = microstates.get_masks()[:, 1:, :]
-        masks = np.any(masks, axis=-1)
+    cpdef void set_masks(self, microstates):
+        """ Set occupancy masks. """
         self.Nmasks = self.n * (self.Nm - (self.n**self.Ns))
+        masks = np.any(microstates.get_masks()[:, 1:, :], axis=-1)
         b_ind, m_ind = masks.T.nonzero()
         self.m_ind = array('I', m_ind)
         self.b_ind = array('I', b_ind)
 
-    cpdef array get_occupancies(self):
-        """ Get flattened Nc x b overall occupancy array. """
-
-        cdef array occupancies = clone(array('d'), self.Nc*self.n, True)
-        cdef array probabilities = clone(array('d'), self.Nm, True)
-        cdef array activities = clone(array('d'), self.density*self.n*self.Nm, False)
-        self.c_preallocate_activities(activities)
-        self.set_occupancies(activities, probabilities, occupancies)
-        return occupancies
-
     @cython.boundscheck(False)
     @cython.wraparound(False)
-    cdef void set_occupancies(self, array activities,
-                                array probabilities,
-                                array occupancies) nogil:
+    cdef void set_occupancies(self) nogil:
         cdef unsigned int i, j, k, row
-        cdef double p, ms_occupancy
+        cdef double p, occupancy
         cdef unsigned int sites_bound
 
         # iterate across concentrations
         for i in xrange(self.Nc):
             row = i*self.n
-            self.set_probabilities(activities, probabilities, i)
+            self.set_probabilities(i)
 
             # iterate over unmasked sites
             for index in xrange(self.Nmasks):
                 j = self.m_ind.data.as_uints[index]
                 k = self.b_ind.data.as_uints[index]
-                p = probabilities.data.as_doubles[j]
+                p = self.probabilities.data.as_doubles[j]
                 sites_bound = self.a.data.as_uints[k*self.Nm + j]
-                occupancies.data.as_doubles[row + k] += (p * sites_bound)
+                occupancy = self.occupancies.data.as_doubles[row + k]
+                self.occupancies.data.as_doubles[row + k] = occupancy + (p * sites_bound)
 
 
 class PartitionFunction:
@@ -518,7 +297,7 @@ class PartitionFunction:
     def c_get_overall_occupancies(self):
         """ Get Nc x b occupancy array. """
 
-        c_pf = cOverallPartitionFunction(self.microstates, self.concentrations)
+        c_pf = cOverallPF(self.microstates, self.concentrations)
 
         # convert array to ndarray
         shape = (self.Nc, self.b-1)
@@ -532,11 +311,14 @@ class PartitionFunction:
 
         return occupancies
 
-    def c_get_occupancies(self):
+    def c_get_occupancies(self, method='recursive'):
         """ Get Nc x b x Ns occupancy array. """
 
         # instantiate partition function
-        c_pf = cPartitionFunction(self.microstates, self.concentrations)
+        if method == 'iterative':
+            c_pf = cIterativePF(self.microstates, self.concentrations)
+        else:
+            c_pf = cRecursivePF(self.microstates, self.concentrations)
 
         # convert array to ndarray
         shape = (self.Nc, self.b-1, self.Ns)
@@ -545,7 +327,7 @@ class PartitionFunction:
 
         # append balance
         balance = (1 - occupancies.sum(axis=1)).reshape(self.Nc, 1, self.Ns)
-        occupancies = np.append(occupancies, balance, axis=1)
+        occupancies = np.append(balance, occupancies, axis=1)
 
         return occupancies
 
@@ -588,12 +370,12 @@ class PartitionFunction:
         return np.asarray(o,dtype=np.float64).reshape(self.Ns, self.Nc, self.b)
 
 
+cdef void c_set_occupancies(array probabilities,
+                              array masks,
+                              array occupancies,
+                              int Ns, int b, int Nc, int Nm) nogil:
 
-
-cdef void c_set_occupancies(array[double] probabilities,
-                              array[long] masks,
-                              array[double] occupancies,
-                              int Ns, int b, int Nc, int Nm):
+    """ Pure cython implementation of set_occupancies. """
     cdef int i, j, k, index
     cdef int mask
     cdef double p
@@ -606,47 +388,3 @@ cdef void c_set_occupancies(array[double] probabilities,
                     if mask == 1:
                         p = probabilities.data.as_doubles[j*Nm + index]
                         occupancies.data.as_doubles[i*Nc*b + j*b + k] += p
-
-
-cpdef unsigned int get_ternary_dim(unsigned int x):
-    """ Get highest dimension of ternary representation (python interface). """
-    return c_get_ternary_dim(x)
-
-cdef unsigned int c_get_ternary_dim(unsigned int x) nogil:
-    """ Get highest dimension of ternary representation (cython only). """
-    cdef unsigned int n = 0
-    while x // (3**(n+1)) > 0:
-        n += 1
-    return n
-
-cpdef tuple get_ternary_repr(unsigned int x):
-    """ Gets ternary representation of string (python interface). """
-    cdef int n = <int>c_get_ternary_dim(x)
-    cdef array bits = clone(array('i'), n+1, False)
-    c_set_ternary_bits(x, n, bits)
-    return (n, bits)
-
-cdef void c_set_ternary_bits(unsigned int x, int n, array bits) nogil:
-    """ Sets ternary bit values. """
-    cdef unsigned int base, num
-
-    # add digits
-    while n >= 0:
-        base = 3**n
-        num = x // base
-        bits.data.as_ints[n] = num
-        x -= num*base
-        n -= 1
-
-cdef unsigned int c_bits_to_int(array bits, unsigned int n, unsigned int base=3) nogil:
-    """ Converts bits to integer value (cython only). """
-    cdef unsigned int index
-    cdef unsigned int k = 0
-    for index in xrange(n):
-        k += bits.data.as_uints[index] * (base**index)
-    return k
-
-cpdef unsigned int bits_to_int(array bits, unsigned int n, unsigned int base=3):
-    """ Converts bits to integer value (python interface). """
-    return c_bits_to_int(bits, n, base)
-

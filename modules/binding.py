@@ -57,13 +57,13 @@ class Sweep:
         self.ets = None
         self.Ns = None
 
-    def set_occupancies(self, microstates, method='c'):
+    def set_occupancies(self, microstates, method='recursive'):
         """ Get Ns x Nc x b occupancy array. """
         pf = PartitionFunction(microstates, self.C)
-        if method == 'py':
+        if method == 'python':
             self.occupancies = pf.get_occupancies()
         else:
-            occupancies = pf.c_get_occupancies()
+            occupancies = pf.c_get_occupancies(method=method)
             self.occupancies = np.swapaxes(occupancies.T, 1, 2)
 
         self.total_occupancy = self.occupancies[:,:,1:].sum(axis=-1)
@@ -249,7 +249,7 @@ class Sweep:
 
         return fig, cmap, norm
 
-    def add_contour(self, ax, species='Pnt', variable='Pnt', fixed=0, overall=True, color='r'):
+    def add_contour(self, ax, species='Pnt', variable='Pnt', fixed=0, overall=True, color='r', **kwargs):
 
         # get data
         species_dim = self.names[species]
@@ -304,7 +304,13 @@ class AggregateSweep(Sweep):
         """ Plot overall occupancy across the entire element. """
         return self.plot_occupancy(**kwargs)
 
-    def add_contour(self, ax, species='Pnt', variable='Pnt', fixed=0, color='r'):
+    def plot_contours(self, **kwargs):
+        """ Plot overall occupancy contour. """
+        fig, cmap, norm = self.create_figure(**kwargs)
+        ax = fig.axes[1]
+        self.add_contour(ax, **kwargs)
+
+    def add_contour(self, ax, species='Pnt', variable='Pnt', fixed=0, color='r', **kwargs):
 
         # get data
         species_dim = self.names[species]
