@@ -10,12 +10,12 @@ from array import array
 from cpython.array cimport array, clone
 
 # import microstates
-from microstates cimport cMicrostates
-ctypedef cMicrostates cMS
+from microstates cimport cRecursiveMicrostates, cIterativeMicrostates
+ctypedef cIterativeMicrostates cIMS
+ctypedef cRecursiveMicrostates cRMS
 
 
-
-cdef class cRecursivePF:
+cdef class cPF:
     cdef unsigned int Ns
     cdef unsigned int Nc
     cdef unsigned int Nm
@@ -23,10 +23,7 @@ cdef class cRecursivePF:
     cdef unsigned int n
     cdef unsigned int density
     cdef array C
-    cdef array a
-    cdef array m
     cdef array E
-    cdef array activities
     cdef array probabilities
     cdef array occupancies
 
@@ -41,17 +38,169 @@ cdef class cRecursivePF:
         self.set_energies(microstates)
         self.reset()
 
+    cdef void set_energies(self, microstates):
+        pass
+
     cdef void reset(self):
-        """ Initialize probabilities and occupancies with zeros. """
-        self.activities = clone(array('d'), self.density*self.n*self.Nm, True)
-        self.probabilities = clone(array('d'), self.Nm, True)
-        self.occupancies = clone(array('d'),self.Nc*self.n*self.Ns, True)
+        pass
+
+
+cdef class cRecursivePF(cPF):
+    """ Partition function in which arrays are ordered via tree traversal. """
+
+    # attributes
+    cdef unsigned int index
+    cdef array concentrations
+
+    def __init__(self, microstates, concentrations):
+        cPF.__init__(self, microstates, concentrations)
+        self.concentrations = clone(array('d'), self.n, True)
+        self.index = 0
+
+    cpdef array get_occupancies(self):
+        """ Get flattened Nc x b x Ns occupancy array. """
+        self.reset()
+        self.set_occupancies()
+        return self.occupancies
 
     cdef void set_energies(self, microstates):
         """ Set microstate energies. """
-        cdef cMS ms = microstates.get_c_microstates()
-        self.a = ms.a
+        cdef cRMS ms = microstates.get_c_microstates(recursive=True)
         self.E = ms.E
+
+    cdef void reset(self):
+        """ Initialize probabilities and occupancies with zeros. """
+        self.probabilities = clone(array('d'), self.Nm, True)
+        self.occupancies = clone(array('d'),self.Nc*self.n*self.Ns, True)
+
+    @cython.boundscheck(False)
+    @cython.wraparound(False)
+    cdef void set_concentrations(self, unsigned int c_index) nogil:
+        """ Set concentration vector. """
+        cdef double c0, c1
+        c0 = self.C.data.as_doubles[c_index // self.density]
+        c1 = self.C.data.as_doubles[c_index % self.density]
+        self.concentrations.data.as_doubles[0] = c0
+        self.concentrations.data.as_doubles[1] = c1
+
+    @cython.boundscheck(False)
+    @cython.wraparound(False)
+    cdef void set_probabilities(self) nogil:
+        cdef unsigned int i
+        cdef unsigned int state
+        cdef double Z
+        cdef double boltzmann_weight
+
+        # set ground state
+        Z = self.E.data.as_doubles[0]
+        self.probabilities.data.as_doubles[0] = Z
+
+        # run recursion
+        self.index = 1 # skips empty state
+        for state in xrange(self.b):
+            Z += self.set_probability(0, state, 1)
+
+        # apply normalization
+        for i in xrange(self.Nm):
+            boltzmann_weight = self.probabilities.data.as_doubles[i]
+            self.probabilities.data.as_doubles[i] = (boltzmann_weight / Z)
+
+    @cython.boundscheck(False)
+    @cython.wraparound(False)
+    cdef double set_probability(self,
+                          unsigned int site,
+                          unsigned int state,
+                          double degeneracy) nogil:
+
+        cdef unsigned int new_state
+        cdef double boltzmann_weight
+        cdef double Z = 0
+
+        # increment degeneracy
+        if state != 0:
+            degeneracy *= self.concentrations.data.as_doubles[state-1]
+
+        # recurse
+        if site < (self.Ns - 1):
+            for new_state in xrange(self.b):
+                Z += self.set_probability(site+1, new_state, degeneracy)
+
+        # if site is unoccupied, don't make an assignment but continue
+        if state != 0:
+
+            # set (non-normalized) partition
+            boltzmann_weight = self.E.data.as_doubles[self.index] * degeneracy
+            self.probabilities.data.as_doubles[self.index] = boltzmann_weight
+            Z += boltzmann_weight
+
+            # increment index
+            self.index += 1
+
+        return Z
+
+    @cython.boundscheck(False)
+    @cython.wraparound(False)
+    cdef void set_occupancies(self) nogil:
+        cdef unsigned int c_index, state, row
+        cdef double p
+
+        # iterate across concentrations
+        for c_index in xrange(self.Nc):
+            row = c_index*self.n*self.Ns
+            self.set_concentrations(c_index)
+            self.set_probabilities()
+
+            # run recursion
+            self.index = 1 # skips ground state
+            for state in xrange(self.b):
+                p = self.set_occupancy(0, state, row)
+
+    @cython.boundscheck(False)
+    @cython.wraparound(False)
+    cdef double set_occupancy(self,
+                          unsigned int site,
+                          unsigned int state,
+                          unsigned int row) nogil:
+        cdef unsigned int index
+        cdef unsigned int new_state
+        cdef double p = 0
+        cdef double occupancy
+
+        # recurse
+        if site < (self.Ns - 1):
+            for new_state in xrange(self.b):
+                p += self.set_occupancy(site+1, new_state, row)
+
+        # if site is unoccupied, don't make an assignment but continue
+        if state != 0:
+
+            # add probability for current state
+            p += self.probabilities.data.as_doubles[self.index]
+
+            # assign probabilities to current site/occupant pair
+            index = row + (state-1)*self.Ns + site
+            occupancy = self.occupancies.data.as_doubles[index]
+            self.occupancies.data.as_doubles[index] = occupancy + p
+
+            # increment index
+            self.index += 1
+
+        return p
+
+
+cdef class cIterativePF(cPF):
+    """ Partition function in which arrays are ordered by bit rep. """
+
+    cdef unsigned int Nmasks
+    cdef array m_ind
+    cdef array b_ind
+    cdef array s_ind
+    cdef array a
+    cdef array activities
+
+    def __init__(self, microstates, concentrations):
+        cPF.__init__(self, microstates, concentrations)
+        self.set_masks(microstates)
 
     cpdef array get_occupancies(self):
         """ Get flattened Nc x b x Ns occupancy array. """
@@ -64,18 +213,90 @@ cdef class cRecursivePF:
         """ Get preallocated Nc x Nm probability array. (not used) """
         cdef array[double] activities
         activities = self.preallocate_activities()
-        return self.preallocate_probabilities(activities)
+        return self.c_preallocate_probabilities(activities)
 
     cpdef void preallocate_activities(self):
         """ Get preallocated activity array. (python interface) """
         self.c_preallocate_activities(self.activities)
 
-    cdef void c_preallocate_activities(self, array activity) with gil:
+    cdef void set_energies(self, microstates):
+        """ Set microstate energies. """
+        cdef cIMS ms = microstates.get_c_microstates(recursive=False)
+        self.a = ms.a
+        self.E = ms.E
+
+    cdef void reset(self):
+        """ Initialize probabilities and occupancies with zeros. """
+        self.activities = clone(array('d'), self.density*self.n*self.Nm, True)
+        self.probabilities = clone(array('d'), self.Nm, True)
+        self.occupancies = clone(array('d'),self.Nc*self.n*self.Ns, True)
+
+    cdef void set_masks(self, microstates):
+        """ Set occupancy masks. """
+
+        # set mask dimension
+        self.Nmasks = self.n*self.Ns*(self.b**(self.Ns-1))
+
+        # set masks
+        masks = microstates.get_masks()[:, 1:, :]
+        m_ind, b_ind, s_ind = masks.nonzero()
+        self.m_ind = array('I', m_ind)
+        self.b_ind = array('I', b_ind)
+        self.s_ind = array('I', s_ind)
+
+    @cython.boundscheck(False)
+    @cython.wraparound(False)
+    cdef void set_probabilities(self, unsigned int ind) nogil:
+        """ Preallocate microstate probabilities for given concentration. """
+
+        cdef unsigned int i
+        cdef unsigned int c0 = ind // self.density
+        cdef unsigned int c1 = ind % self.density
+        cdef unsigned int row0 = c0*self.n*self.Nm
+        cdef unsigned int row1 = (c1*self.n + 1)*self.Nm
+        cdef double a0, a1, energy
+        cdef double total_energy = 0
+
+        for i in xrange(self.Nm):
+            a0 = self.activities.data.as_doubles[row0 + i]
+            a1 = self.activities.data.as_doubles[row1 + i]
+            energy = self.E.data.as_doubles[i] * a0 * a1
+            self.probabilities.data.as_doubles[i] = energy
+            total_energy += energy
+
+        for i in xrange(self.Nm):
+            energy = self.probabilities.data.as_doubles[i]
+            self.probabilities.data.as_doubles[i] = energy / total_energy
+
+    @cython.boundscheck(False)
+    @cython.wraparound(False)
+    cdef void set_occupancies(self) nogil:
+        cdef unsigned int index, row
+        cdef unsigned int i, j, k, l
+        cdef double p, occupancy
+
+        # iterate across concentrations
+        for i in xrange(self.Nc):
+            row = i*self.n*self.Ns
+            self.set_probabilities(i)
+
+            # iterate over unmasked sites
+            for index in xrange(self.Nmasks):
+                j = self.m_ind.data.as_uints[index]
+                k = self.b_ind.data.as_uints[index]
+                l = self.s_ind.data.as_uints[index]
+                p = self.probabilities.data.as_doubles[j]
+                occupancy = self.occupancies.data.as_doubles[row+k*self.Ns+l]
+                self.occupancies.data.as_doubles[row+k*self.Ns+l] = occupancy+p
+
+    @cython.boundscheck(False)
+    @cython.wraparound(False)
+    cdef void c_preallocate_activities(self, array activity) nogil:
         """ Get preallocated activity array. (used) """
 
-        cdef int i, j, k
+        cdef unsigned int i, j, k
         cdef unsigned int a
-        cdef int a_row, a_col
+        cdef unsigned int a_row, a_col
         cdef double C
 
         # get weights
@@ -95,13 +316,13 @@ cdef class cRecursivePF:
     cdef array c_preallocate_probabilities(self, array activities):
         """ Get preallocated Nc x Nm probability array. (not used) """
 
-        cdef int i, j, k
+        cdef unsigned int i, j, k
         cdef array p
         cdef array es = array('d', np.empty(self.Nm, dtype=np.float64))
         cdef double a0, a1
         cdef double e, total_e
-        cdef int a_row0, a_row1
-        cdef int p_row
+        cdef unsigned int a_row0, a_row1
+        cdef unsigned int p_row
 
         # compute probabilities
         p = array('d', np.zeros(self.Nc*self.Nm, dtype=np.float64))
@@ -126,277 +347,8 @@ cdef class cRecursivePF:
 
         return p
 
-    @cython.boundscheck(False)
-    @cython.wraparound(False)
-    cdef void set_probabilities(self, unsigned int ind) with gil:
-        """ Preallocate microstate probabilities for given concentration. """
-
-        cdef int i
-        cdef int c0 = ind // self.density
-        cdef int c1 = ind % self.density
-        cdef int row0 = c0*self.n*self.Nm
-        cdef int row1 = (c1*self.n + 1)*self.Nm
-        cdef double a0, a1, energy
-        cdef double total_energy = 0
-
-        for i in xrange(self.Nm):
-            a0 = self.activities.data.as_doubles[row0 + i]
-            a1 = self.activities.data.as_doubles[row1 + i]
-            energy = self.E.data.as_doubles[i] * a0 * a1
-            self.probabilities.data.as_doubles[i] = energy
-            total_energy += energy
-
-        for i in xrange(self.Nm):
-            energy = self.probabilities.data.as_doubles[i]
-            self.probabilities.data.as_doubles[i] = energy / total_energy
-
-    @cython.boundscheck(False)
-    @cython.wraparound(False)
-    cdef void set_occupancies(self) with gil:
-        cdef unsigned int c_index, state, row
-        cdef double p
-
-        # iterate across concentrations
-        for c_index in xrange(self.Nc):
-            row = c_index*self.n*self.Ns
-            self.set_probabilities(c_index)
-
-            # run recursion
-            for state in xrange(self.b):
-                p = self.set_occupancy(0, state, 0, row)
-
-    @cython.boundscheck(False)
-    @cython.wraparound(False)
-    cdef double set_occupancy(self,
-                          unsigned int site_index,
-                          unsigned int site_state,
-                          unsigned int neighbor_microstate,
-                          unsigned int row) with gil:
-
-        cdef unsigned int microstate, column
-        cdef unsigned int neighbor_state
-        cdef double p = 0
-        cdef double occupancy
-
-        # get microstate
-        microstate = neighbor_microstate + site_state*(self.b**site_index)
-
-        # recurse
-        if site_index < (self.Ns - 1):
-            for neighbor_state in xrange(self.b):
-                p += self.set_occupancy(site_index+1, neighbor_state, microstate, row)
-
-        # if site is unoccupied, don't make an assignment but continue
-        if site_state != 0:
-
-            # add probability for current state
-            p += self.probabilities.data.as_doubles[microstate]
-
-            # assign probabilities to current site/occupant pair
-            column = (site_state-1)*self.Ns
-            occupancy = self.occupancies.data.as_doubles[row+column+site_index]
-            self.occupancies.data.as_doubles[row+column+site_index] = occupancy+ p
-
-        return p
-
-
-""" ================ WORKING ON THIS ================ """
-
-
-cdef class cRecursivePFNew(cRecursivePF):
-    cdef unsigned int index
-    cdef array concentrations
-
-    def __init__(self, microstates, concentrations):
-        cRecursivePF.__init__(self, microstates, concentrations)
-        self.concentrations = clone(array('d'), self.n, True)
-        self.index = 0
-
-    cpdef array get_occupancies(self):
-        """ Get flattened Nc x b x Ns occupancy array. """
-        self.reset()
-        self.rset_occupancies()
-        return self.occupancies
-
-    cdef void reset(self):
-        """ Initialize probabilities and occupancies with zeros. """
-        self.activities = clone(array('d'), self.Nm, True)
-        self.probabilities = clone(array('d'), self.Nm, True)
-        self.occupancies = clone(array('d'),self.Nc*self.n*self.Ns, True)
-
-    cdef void set_energies(self, microstates):
-        """ Set microstate energies. """
-        cdef cMS ms = microstates.get_c_rmicrostates()
-        self.a = ms.a
-        self.E = ms.E
-
-    cdef void set_concentrations(self, unsigned int c_index):
-        """ Set concentration vector. """
-        cdef double c0, c1
-        c0 = self.C.data.as_doubles[c_index // self.density]
-        c1 = self.C.data.as_doubles[c_index % self.density]
-        self.concentrations.data.as_doubles[0] = c0
-        self.concentrations.data.as_doubles[1] = c1
-
-    @cython.boundscheck(False)
-    @cython.wraparound(False)
-    cdef void rset_probabilities(self) with gil:
-        cdef unsigned int state
-        cdef unsigned int i
-        cdef double Z
-        cdef double boltzmann_weight
-
-        # set ground state
-        Z = self.E.data.as_doubles[0]
-        self.probabilities.data.as_doubles[0] = Z
-
-        # run recursion
-        self.index = 1 # skips empty state
-        for state in xrange(self.b):
-            Z += self.rset_probability(0, state, 1)
-
-        # apply normalization
-        for i in xrange(self.Nm):
-            boltzmann_weight = self.probabilities.data.as_doubles[i]
-            self.probabilities.data.as_doubles[i] = (boltzmann_weight / Z)
-
-    @cython.boundscheck(False)
-    @cython.wraparound(False)
-    cdef double rset_probability(self,
-                          unsigned int site,
-                          unsigned int state,
-                          double degeneracy) nogil:
-
-        cdef unsigned int new_state
-        cdef double boltzmann_weight
-        cdef double Z = 0
-
-        # increment degeneracy
-        if state != 0:
-            degeneracy *= self.concentrations.data.as_doubles[state-1]
-
-        # recurse
-        if site < (self.Ns - 1):
-            for new_state in xrange(self.b):
-                Z += self.rset_probability(site+1, new_state, degeneracy)
-
-        # if site is unoccupied, don't make an assignment but continue
-        if state != 0:
-
-            # set (non-normalized) partition
-            boltzmann_weight = self.E.data.as_doubles[self.index] * degeneracy
-            self.probabilities.data.as_doubles[self.index] = boltzmann_weight
-            Z += boltzmann_weight
-
-            # increment index
-            self.index += 1
-
-        return Z
-
-    @cython.boundscheck(False)
-    @cython.wraparound(False)
-    cdef void rset_occupancies(self) with gil:
-        cdef unsigned int c_index, state, row
-        cdef double p
-
-        # iterate across concentrations
-        for c_index in xrange(self.Nc):
-            row = c_index*self.n*self.Ns
-            self.set_concentrations(c_index)
-            self.rset_probabilities()
-
-            # run recursion
-            self.index = 1 # skips ground state
-            for state in xrange(self.b):
-                p = self.rset_occupancy(0, state, row)
-
-    @cython.boundscheck(False)
-    @cython.wraparound(False)
-    cdef double rset_occupancy(self,
-                          unsigned int site,
-                          unsigned int state,
-                          unsigned int row) nogil:
-        cdef unsigned int index
-        cdef unsigned int new_state
-        cdef double p = 0
-        cdef double occupancy
-
-        # recurse
-        if site < (self.Ns - 1):
-            for new_state in xrange(self.b):
-                p += self.rset_occupancy(site+1, new_state, row)
-
-        # if site is unoccupied, don't make an assignment but continue
-        if state != 0:
-
-            # add probability for current state
-            p += self.probabilities.data.as_doubles[self.index]
-
-            # assign probabilities to current site/occupant pair
-            index = row + (state-1)*self.Ns + site
-            occupancy = self.occupancies.data.as_doubles[index]
-            self.occupancies.data.as_doubles[index] = occupancy + p
-
-            # increment index
-            self.index += 1
-
-        return p
-
-
-""" ================ WORKING ON THIS ================ """
-
-
-cdef class cIterativePF(cRecursivePF):
-    cdef unsigned int Nmasks
-    cdef array m_ind
-    cdef array b_ind
-    cdef array s_ind
-
-    def __init__(self, microstates, concentrations):
-        cRecursivePF.__init__(self, microstates, concentrations)
-        self.set_masks(microstates)
-
-    cpdef void set_masks(self, microstates):
-        """ Set occupancy masks. """
-
-        # set mask dimension
-        self.Nmasks = self.n*self.Ns*(self.b**(self.Ns-1))
-
-        # set masks
-        masks = microstates.get_masks()[:, 1:, :]
-        m_ind, b_ind, s_ind = masks.nonzero()
-        self.m_ind = array('I', m_ind)
-        self.b_ind = array('I', b_ind)
-        self.s_ind = array('I', s_ind)
-
-    @cython.boundscheck(False)
-    @cython.wraparound(False)
-    cdef void set_occupancies(self) with gil:
-        cdef unsigned int i, j, k, l, row
-        cdef double p, occupancy
-
-        # iterate across concentrations
-        for i in xrange(self.Nc):
-            row = i*self.n*self.Ns
-            self.set_probabilities(i)
-
-            # iterate over unmasked sites
-            for index in xrange(self.Nmasks):
-                j = self.m_ind.data.as_uints[index]
-                k = self.b_ind.data.as_uints[index]
-                l = self.s_ind.data.as_uints[index]
-                p = self.probabilities.data.as_doubles[j]
-                occupancy = self.occupancies.data.as_doubles[row+k*self.Ns+l]
-                self.occupancies.data.as_doubles[row+k*self.Ns+l] = occupancy+p
-
 
 cdef class cOverallPF(cIterativePF):
-
-    cdef void reset(self):
-        """ Initialize probabilities and occupancies with zeros. """
-        self.activities = clone(array('d'), self.density*self.n*self.Nm, False)
-        self.probabilities = clone(array('d'), self.Nm, True)
-        self.occupancies = clone(array('d'),self.Nc*self.n, True)
 
     cpdef void set_masks(self, microstates):
         """ Set occupancy masks. """
@@ -406,10 +358,16 @@ cdef class cOverallPF(cIterativePF):
         self.m_ind = array('I', m_ind)
         self.b_ind = array('I', b_ind)
 
+    cdef void reset(self):
+        """ Initialize probabilities and occupancies with zeros. """
+        self.activities = clone(array('d'), self.density*self.n*self.Nm, False)
+        self.probabilities = clone(array('d'), self.Nm, True)
+        self.occupancies = clone(array('d'),self.Nc*self.n, True)
+
     @cython.boundscheck(False)
     @cython.wraparound(False)
-    cdef void set_occupancies(self) with gil:
-        cdef unsigned int i, j, k, row
+    cdef void set_occupancies(self) nogil:
+        cdef unsigned int i, j, k, row, index
         cdef double p, occupancy
         cdef unsigned int sites_bound
 
@@ -426,8 +384,6 @@ cdef class cOverallPF(cIterativePF):
                 sites_bound = self.a.data.as_uints[k*self.Nm + j]
                 occupancy = self.occupancies.data.as_doubles[row + k]
                 self.occupancies.data.as_doubles[row + k] = occupancy + (p * sites_bound)
-
-
 
 
 class PartitionFunction:
@@ -467,8 +423,6 @@ class PartitionFunction:
         # instantiate partition function
         if method == 'iterative':
             c_pf = cIterativePF(self.microstates, self.concentrations)
-        elif method == 'new':
-            c_pf = cRecursivePFNew(self.microstates, self.concentrations)
         else:
             c_pf = cRecursivePF(self.microstates, self.concentrations)
 
@@ -525,7 +479,7 @@ class PartitionFunction:
 cdef void c_set_occupancies(array probabilities,
                               array masks,
                               array occupancies,
-                              int Ns, int b, int Nc, int Nm) with gil:
+                              int Ns, int b, int Nc, int Nm) nogil:
 
     """ Pure cython implementation of set_occupancies. """
     cdef int i, j, k, index
