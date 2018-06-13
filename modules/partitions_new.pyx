@@ -1,6 +1,6 @@
 # cython: boundscheck=False
 # cython: wraparound=False
-# cython: profile=False
+# cython: profile=True
 
 import cython
 import numpy as np
@@ -11,18 +11,21 @@ from cpython.array cimport array, clone
 from libc.math cimport exp
 
 # import microstates
-from microstates cimport cMS
-from microstates cimport cIMS, cRMS
+from microstates cimport cRecursiveMicrostates, cIterativeMicrostates
+ctypedef cIterativeMicrostates cIMS
+ctypedef cRecursiveMicrostates cRMS
 
 
 cdef class cPF:
-    cdef int Ns
-    cdef int Nc
-    cdef long long Nm
-    cdef int b
-    cdef int n
-    cdef int density
+    cdef unsigned int Ns
+    cdef unsigned int Nc
+    cdef unsigned int Nm
+    cdef unsigned int b
+    cdef unsigned int n
+    cdef unsigned int density
     cdef array C
+    cdef array E
+    cdef array probabilities
     cdef array occupancies
 
     def __init__(self, microstates, concentrations):
@@ -33,7 +36,44 @@ cdef class cPF:
         self.n = microstates.b-1
         self.density = concentrations.size
         self.C = array('d', concentrations)
-        self.set_microstates(microstates)
+        self.set_energies(microstates)
+        self.reset()
+
+    cdef void set_energies(self, microstates):
+        pass
+
+    cdef void reset(self):
+        pass
+
+
+
+
+
+
+
+
+
+
+
+
+# don't need E, probabilities
+
+
+cdef class cRecursivePF(cPF):
+    """ Partition function in which arrays are ordered via tree traversal. """
+
+    # attributes
+    cdef unsigned int index
+    cdef double Z
+    cdef unsigned int row
+    cdef array concentrations
+    cdef cRMS ms
+
+    def __init__(self, microstates, concentrations):
+        cPF.__init__(self, microstates, concentrations)
+        self.concentrations = clone(array('d'), self.n, True)
+        self.index = 0
+        self.Z = 0.0
 
     cpdef array get_occupancies(self):
         """ Get flattened Nc x b x Ns occupancy array. """
@@ -41,40 +81,18 @@ cdef class cPF:
         self.set_occupancies()
         return self.occupancies
 
-    @cython.boundscheck(False)
-    @cython.wraparound(False)
-    cdef void set_occupancies(self) nogil:
-        pass
-
     cdef void set_microstates(self, microstates):
         """ Set microstate energies. """
-        pass
+        cdef cRMS ms = microstates.get_c_microstates(recursive=True)
+        self.ms = ms
 
     cdef void reset(self):
         """ Initialize probabilities and occupancies with zeros. """
         self.occupancies = clone(array('d'),self.Nc*self.n*self.Ns, True)
 
-
-cdef class cRecursiveLight(cPF):
-    """ Partition function in which arrays are ordered via tree traversal. """
-
-    # attributes
-    cdef int row
-    cdef double Z
-    cdef array concentrations
-    cdef cMS ms
-
-    def __init__(self, microstates, concentrations):
-        cPF.__init__(self, microstates, concentrations)
-        self.concentrations = clone(array('d'), self.n, True)
-
-    cdef void set_microstates(self, microstates):
-        """ Set microstate energies. """
-        self.ms = microstates.get_c_microstates(ms_type='base')
-
     @cython.boundscheck(False)
     @cython.wraparound(False)
-    cdef void set_concentrations(self, int c_index) nogil:
+    cdef void set_concentrations(self, unsigned int c_index) nogil:
         """ Set concentration vector. """
         cdef double c0, c1
         c0 = self.C.data.as_doubles[c_index // self.density]
@@ -85,8 +103,7 @@ cdef class cRecursiveLight(cPF):
     @cython.boundscheck(False)
     @cython.wraparound(False)
     cdef void set_occupancies(self) nogil:
-        cdef int c_index, state
-        cdef double p
+        cdef unsigned int c_index, state
 
         # iterate across concentrations
         for c_index in xrange(self.Nc):
@@ -94,26 +111,27 @@ cdef class cRecursiveLight(cPF):
             self.set_concentrations(c_index)
 
             # initialize partition function (define ground state)
-            self.Z = 1.
+            self.Z = 1
+            self.index = 1
 
             # run recursion
             for state in xrange(self.b):
-                p = self.set_occupancy(0, state, 0, 0., 1.)
+                _ = self.set_occupancy(0, state, 0, 0, 0)
 
             # apply normalization
-            self.normalize()
+            self.normalize_occupancies()
 
     @cython.boundscheck(False)
     @cython.wraparound(False)
     cdef double set_occupancy(self,
-                            int site,
-                            int state,
-                            int neighbor_state,
-                            double deltaG,
-                            double degeneracy,) nogil:
+                          unsigned int site,
+                          unsigned int state,
+                          unsigned int neighbor_state,
+                          double deltaG,
+                          double degeneracy) nogil:
 
-        cdef int index
-        cdef int new_state
+        cdef unsigned int index
+        cdef unsigned int new_state
         cdef double boltzmann_factor = 0
         cdef double p = 0
         cdef double occupancy
@@ -128,8 +146,6 @@ cdef class cRecursiveLight(cPF):
 
             # update microstate degeneracy
             degeneracy *= self.concentrations.data.as_doubles[state-1]
-            if degeneracy == 0:
-                return 0
 
         # recurse (evaluate derivative microstates)
         if site < (self.Ns - 1):
@@ -140,7 +156,7 @@ cdef class cRecursiveLight(cPF):
         if state != 0:
 
             # evaluate (non-normalized) partition
-            boltzmann_factor = exp(-deltaG/(self.ms.R*self.ms.T))*degeneracy
+            boltzmann_factor = (exp(-deltaG/(self.ms.R*self.ms.T))*degeneracy)
             p += boltzmann_factor
 
             # assign probabilities to current site/occupant pair
@@ -150,172 +166,82 @@ cdef class cRecursiveLight(cPF):
 
             # update partition function and microstate index
             self.Z += boltzmann_factor
+            self.index += 1
 
         return p
 
     @cython.boundscheck(False)
     @cython.wraparound(False)
-    cdef void normalize(self) nogil:
+    cdef void normalize_occupancies(self) nogil:
         """ Normalize occupancies by partition function value. """
-        cdef int i
+        cdef unsigned int i
         cdef double occupancy
-        for i in xrange(self.n*self.Ns):
+        for i in xrange(self.Ns*self.n):
             occupancy = self.occupancies.data.as_doubles[self.row+i]
             self.occupancies.data.as_doubles[self.row+i] = occupancy/self.Z
 
 
-cdef class cRecursivePF(cPF):
-    """ Partition function in which arrays are ordered via tree traversal. """
 
-    # attributes
-    cdef array probabilities
-    cdef long long index
-    cdef array concentrations
-    cdef cRMS ms
 
-    def __init__(self, microstates, concentrations):
-        cPF.__init__(self, microstates, concentrations)
-        self.concentrations = clone(array('d'), self.n, True)
-        self.index = 0
 
-    cdef void set_microstates(self, microstates):
-        """ Set microstate energies. """
-        self.ms = microstates.get_c_microstates(ms_type='recursive')
 
-    cdef void reset(self):
-        """ Initialize probabilities and occupancies with zeros. """
-        self.probabilities = clone(array('d'), self.Nm, True)
-        self.occupancies = clone(array('d'),self.Nc*self.n*self.Ns, True)
 
-    @cython.boundscheck(False)
-    @cython.wraparound(False)
-    cdef void set_concentrations(self, int c_index) nogil:
-        """ Set concentration vector. """
-        cdef double c0, c1
-        c0 = self.C.data.as_doubles[c_index // self.density]
-        c1 = self.C.data.as_doubles[c_index % self.density]
-        self.concentrations.data.as_doubles[0] = c0
-        self.concentrations.data.as_doubles[1] = c1
 
-    @cython.boundscheck(False)
-    @cython.wraparound(False)
-    cdef void set_probabilities(self) nogil:
-        cdef int i
-        cdef int state
-        cdef double Z
-        cdef double boltzmann_weight
 
-        # set ground state
-        Z = self.ms.E.data.as_doubles[0]
-        self.probabilities.data.as_doubles[0] = Z
 
-        # run recursion
-        self.index = 1 # skips empty state
-        for state in xrange(self.b):
-            Z += self.set_probability(0, state, 1)
 
-        # apply normalization
-        for i in xrange(self.Nm):
-            boltzmann_weight = self.probabilities.data.as_doubles[i]
-            self.probabilities.data.as_doubles[i] = (boltzmann_weight / Z)
 
-    @cython.boundscheck(False)
-    @cython.wraparound(False)
-    cdef double set_probability(self,
-                          int site,
-                          int state,
-                          double degeneracy) nogil:
 
-        cdef int new_state
-        cdef double boltzmann_weight
-        cdef double Z = 0
 
-        # increment degeneracy
-        if state != 0:
-            degeneracy *= self.concentrations.data.as_doubles[state-1]
 
-        # recurse
-        if site < (self.Ns - 1):
-            for new_state in xrange(self.b):
-                Z += self.set_probability(site+1, new_state, degeneracy)
 
-        # if site is unoccupied, don't make an assignment but continue
-        if state != 0:
 
-            # set (non-normalized) partition
-            boltzmann_weight = self.ms.E.data.as_doubles[self.index] * degeneracy
-            self.probabilities.data.as_doubles[self.index] = boltzmann_weight
-            Z += boltzmann_weight
 
-            # increment index
-            self.index += 1
 
-        return Z
 
-    @cython.boundscheck(False)
-    @cython.wraparound(False)
-    cdef void set_occupancies(self) nogil:
-        cdef int c_index, state, row
-        cdef double p
 
-        # iterate across concentrations
-        for c_index in xrange(self.Nc):
-            row = c_index*self.n*self.Ns
-            self.set_concentrations(c_index)
-            self.set_probabilities()
 
-            # run recursion
-            self.index = 1
-            for state in xrange(self.b):
-                p = self.set_occupancy(0, state, row)
 
-    @cython.boundscheck(False)
-    @cython.wraparound(False)
-    cdef double set_occupancy(self,
-                          int site,
-                          int state,
-                          int row) nogil:
-        cdef int index
-        cdef int new_state
-        cdef double p = 0
-        cdef double occupancy
 
-        # recurse
-        if site < (self.Ns - 1):
-            for new_state in xrange(self.b):
-                p += self.set_occupancy(site+1, new_state, row)
 
-        # if site is unoccupied, don't make an assignment but continue
-        if state != 0:
 
-            # add probability for current state
-            p += self.probabilities.data.as_doubles[self.index]
 
-            # assign probabilities to current site/occupant pair
-            index = row + (state-1)*self.Ns + site
-            occupancy = self.occupancies.data.as_doubles[index]
-            self.occupancies.data.as_doubles[index] = occupancy + p
 
-            # increment index
-            self.index += 1
 
-        return p
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 cdef class cIterativePF(cPF):
     """ Partition function in which arrays are ordered by bit rep. """
-    cdef long long Nmasks
-    cdef array probabilities
+
+    cdef unsigned int Nmasks
     cdef array m_ind
     cdef array b_ind
     cdef array s_ind
     cdef array a
     cdef array activities
-    cdef cIMS ms
 
     def __init__(self, microstates, concentrations):
         cPF.__init__(self, microstates, concentrations)
         self.set_masks(microstates)
+
+    cpdef array get_occupancies(self):
+        """ Get flattened Nc x b x Ns occupancy array. """
+        self.reset()
+        self.preallocate_activities()
+        self.set_occupancies()
+        return self.occupancies
 
     cpdef array get_probabilities(self):
         """ Get preallocated Nc x Nm probability array. (not used) """
@@ -327,15 +253,17 @@ cdef class cIterativePF(cPF):
         """ Get preallocated activity array. (python interface) """
         self.c_preallocate_activities(self.activities)
 
-    cdef void set_microstates(self, microstates):
+    cdef void set_energies(self, microstates):
         """ Set microstate energies. """
-        self.ms = microstates.get_c_microstates(ms_type='iterative')
+        cdef cIMS ms = microstates.get_c_microstates(recursive=False)
+        self.a = ms.a
+        self.E = ms.E
 
     cdef void reset(self):
         """ Initialize probabilities and occupancies with zeros. """
         self.activities = clone(array('d'), self.density*self.n*self.Nm, True)
         self.probabilities = clone(array('d'), self.Nm, True)
-        self.occupancies = clone(array('d'), self.Nc*self.n*self.Ns, True)
+        self.occupancies = clone(array('d'),self.Nc*self.n*self.Ns, True)
 
     cdef void set_masks(self, microstates):
         """ Set occupancy masks. """
@@ -346,27 +274,27 @@ cdef class cIterativePF(cPF):
         # set masks
         masks = microstates.get_masks()[:, 1:, :]
         m_ind, b_ind, s_ind = masks.nonzero()
-        self.m_ind = array('q', m_ind)
-        self.b_ind = array('q', b_ind)
-        self.s_ind = array('q', s_ind)
+        self.m_ind = array('I', m_ind)
+        self.b_ind = array('I', b_ind)
+        self.s_ind = array('I', s_ind)
 
     @cython.boundscheck(False)
     @cython.wraparound(False)
-    cdef void set_probabilities(self, int c_index) nogil:
+    cdef void set_probabilities(self, unsigned int ind) nogil:
         """ Preallocate microstate probabilities for given concentration. """
 
-        cdef int c0 = c_index // self.density
-        cdef int c1 = c_index % self.density
-        cdef long long i
-        cdef long long row0 = c0*self.n*self.Nm
-        cdef long long row1 = (c1*self.n + 1)*self.Nm
+        cdef unsigned int i
+        cdef unsigned int c0 = ind // self.density
+        cdef unsigned int c1 = ind % self.density
+        cdef unsigned int row0 = c0*self.n*self.Nm
+        cdef unsigned int row1 = (c1*self.n + 1)*self.Nm
         cdef double a0, a1, energy
         cdef double total_energy = 0
 
         for i in xrange(self.Nm):
             a0 = self.activities.data.as_doubles[row0 + i]
             a1 = self.activities.data.as_doubles[row1 + i]
-            energy = self.ms.E.data.as_doubles[i] * a0 * a1
+            energy = self.E.data.as_doubles[i] * a0 * a1
             self.probabilities.data.as_doubles[i] = energy
             total_energy += energy
 
@@ -377,12 +305,9 @@ cdef class cIterativePF(cPF):
     @cython.boundscheck(False)
     @cython.wraparound(False)
     cdef void set_occupancies(self) nogil:
-        cdef int i, row
-        cdef long long index, j, k, l
+        cdef unsigned int index, row
+        cdef unsigned int i, j, k, l
         cdef double p, occupancy
-
-        # preallocate activities
-        self.c_preallocate_activities(self.activities)
 
         # iterate across concentrations
         for i in xrange(self.Nc):
@@ -391,9 +316,9 @@ cdef class cIterativePF(cPF):
 
             # iterate over unmasked sites
             for index in xrange(self.Nmasks):
-                j = self.m_ind.data.as_longlongs[index]
-                k = self.b_ind.data.as_longlongs[index]
-                l = self.s_ind.data.as_longlongs[index]
+                j = self.m_ind.data.as_uints[index]
+                k = self.b_ind.data.as_uints[index]
+                l = self.s_ind.data.as_uints[index]
                 p = self.probabilities.data.as_doubles[j]
                 occupancy = self.occupancies.data.as_doubles[row+k*self.Ns+l]
                 self.occupancies.data.as_doubles[row+k*self.Ns+l] = occupancy+p
@@ -403,10 +328,9 @@ cdef class cIterativePF(cPF):
     cdef void c_preallocate_activities(self, array activity) nogil:
         """ Get preallocated activity array. (used) """
 
-        cdef int i, j
-        cdef long long k
-        cdef int a
-        cdef long long a_row, a_col
+        cdef unsigned int i, j, k
+        cdef unsigned int a
+        cdef unsigned int a_row, a_col
         cdef double C
 
         # get weights
@@ -418,7 +342,7 @@ cdef class cIterativePF(cPF):
                 a_col = j*self.Nm
 
                 for k in xrange(self.Nm):
-                    a = self.ms.a.data.as_longs[a_col + k]
+                    a = self.a.data.as_uints[a_col + k]
                     activity.data.as_doubles[a_row + a_col + k] = C**a
 
     @cython.boundscheck(False)
@@ -426,13 +350,13 @@ cdef class cIterativePF(cPF):
     cdef array c_preallocate_probabilities(self, array activities):
         """ Get preallocated Nc x Nm probability array. (not used) """
 
-        cdef int i, j
-        cdef long long k
+        cdef unsigned int i, j, k
         cdef array p
         cdef array es = array('d', np.empty(self.Nm, dtype=np.float64))
         cdef double a0, a1
         cdef double e, total_e
-        cdef long long a_row0, a_row1, p_row
+        cdef unsigned int a_row0, a_row1
+        cdef unsigned int p_row
 
         # compute probabilities
         p = array('d', np.zeros(self.Nc*self.Nm, dtype=np.float64))
@@ -448,7 +372,7 @@ cdef class cIterativePF(cPF):
                 for k in xrange(self.Nm):
                     a0 = activities.data.as_doubles[a_row0 + k]
                     a1 = activities.data.as_doubles[a_row1 + k]
-                    e = self.ms.E.data.as_doubles[k] * a0 * a1
+                    e = self.E.data.as_doubles[k] * a0 * a1
                     es.data.as_doubles[k] = e
                     total_e += e
 
@@ -458,10 +382,42 @@ cdef class cIterativePF(cPF):
         return p
 
 
+cdef class cOverallPF(cIterativePF):
 
-cdef class cTest(cRecursiveLight):
-    pass
+    cpdef void set_masks(self, microstates):
+        """ Set occupancy masks. """
+        self.Nmasks = self.n * (self.Nm - (self.n**self.Ns))
+        masks = np.any(microstates.get_masks()[:, 1:, :], axis=-1)
+        b_ind, m_ind = masks.T.nonzero()
+        self.m_ind = array('I', m_ind)
+        self.b_ind = array('I', b_ind)
 
+    cdef void reset(self):
+        """ Initialize probabilities and occupancies with zeros. """
+        self.activities = clone(array('d'), self.density*self.n*self.Nm, False)
+        self.probabilities = clone(array('d'), self.Nm, True)
+        self.occupancies = clone(array('d'),self.Nc*self.n, True)
+
+    @cython.boundscheck(False)
+    @cython.wraparound(False)
+    cdef void set_occupancies(self) nogil:
+        cdef unsigned int i, j, k, row, index
+        cdef double p, occupancy
+        cdef unsigned int sites_bound
+
+        # iterate across concentrations
+        for i in xrange(self.Nc):
+            row = i*self.n
+            self.set_probabilities(i)
+
+            # iterate over unmasked sites
+            for index in xrange(self.Nmasks):
+                j = self.m_ind.data.as_uints[index]
+                k = self.b_ind.data.as_uints[index]
+                p = self.probabilities.data.as_doubles[j]
+                sites_bound = self.a.data.as_uints[k*self.Nm + j]
+                occupancy = self.occupancies.data.as_doubles[row + k]
+                self.occupancies.data.as_doubles[row + k] = occupancy + (p * sites_bound)
 
 
 class PartitionFunction:
@@ -478,18 +434,31 @@ class PartitionFunction:
         self.microstates = microstates
         self.concentrations = concentrations
 
-    def c_get_occupancies(self, method='base'):
+    def c_get_overall_occupancies(self):
+        """ Get Nc x b occupancy array. """
+
+        c_pf = cOverallPF(self.microstates, self.concentrations)
+
+        # convert array to ndarray
+        shape = (self.Nc, self.b-1)
+        c_occupancies = c_pf.get_occupancies()
+        occupancies = np.array(c_occupancies, dtype=np.float64).reshape(*shape)
+        occupancies = occupancies / self.Ns
+
+        # append balance
+        balance = (1 - occupancies.sum(axis=1)).reshape(self.Nc, 1)
+        occupancies = np.append(balance, occupancies, axis=1)
+
+        return occupancies
+
+    def c_get_occupancies(self, method='recursive'):
         """ Get Nc x b x Ns occupancy array. """
 
         # instantiate partition function
         if method == 'iterative':
             c_pf = cIterativePF(self.microstates, self.concentrations)
-        elif method == 'recursive':
-            c_pf = cRecursivePF(self.microstates, self.concentrations)
-        elif method == 'test':
-            c_pf = cTest(self.microstates, self.concentrations)
         else:
-            c_pf = cRecursiveLight(self.microstates, self.concentrations)
+            c_pf = cRecursivePF(self.microstates, self.concentrations)
 
         # convert array to ndarray
         shape = (self.Nc, self.b-1, self.Ns)

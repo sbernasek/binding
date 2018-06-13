@@ -1,20 +1,20 @@
 # cython: boundscheck=False
 # cython: wraparound=False
-# cython: profile=True
+# cython: profile=False
 
 import cython
-from libc.math cimport exp
 import numpy as np
 cimport numpy as np
 from array import array
 from cpython.array cimport array, clone
 from bits cimport get_ternary_repr, c_bits_to_int
+from libc.math cimport exp
 
 
-cdef class cMicrostates:
+cdef class cMS:
 
-    def __init__(self, unsigned int Ns,
-                 unsigned int N_species,
+    def __init__(self, int Ns,
+                 int N_species,
                  dict params,
                  array ets,
                  double R = 1.987204118*1E-3, double T = 300):
@@ -38,20 +38,35 @@ cdef class cMicrostates:
         # define ETS sites
         self.ets = ets
 
-        # enumerate microstate energies
+    cdef void set_params(self, dict params):
+        cdef int index
+        for index in xrange(self.b-1):
+            self.alpha.data.as_doubles[index] = params['alpha'][index]
+            self.beta.data.as_doubles[index] = params['beta'][index]
+            self.gamma.data.as_doubles[index] = params['gamma'][index]
+
+    @cython.boundscheck(False)
+    @cython.wraparound(False)
+    cdef double get_binding_energy(self, int site_index, int site_state) nogil:
+        """ Get binding energy for single site. """
+        cdef double energy
+        if self.ets.data.as_longs[site_index] == 1:
+            energy = self.alpha.data.as_doubles[site_state-1]
+        else:
+            energy = self.beta.data.as_doubles[site_state-1]
+        return energy
+
+
+cdef class cRMS(cMS):
+    """ Equivalent version in which arrays are ordered by L/R traversal. """
+    def __init__(self, *args):
+        cMS.__init__(self, *args)
         self.reset()
         self.set_energies()
 
     cpdef np.ndarray get_E(self):
         """ Returns microstate energies as np array. """
         return np.array(self.E, dtype=np.float64).reshape(self.Nm)
-
-    cdef void set_params(self, dict params):
-        cdef unsigned int index
-        for index in xrange(self.b-1):
-            self.alpha.data.as_doubles[index] = params['alpha'][index]
-            self.beta.data.as_doubles[index] = params['beta'][index]
-            self.gamma.data.as_doubles[index] = params['gamma'][index]
 
     cdef void reset(self):
         """ Initialize binding energies. """
@@ -60,28 +75,8 @@ cdef class cMicrostates:
     @cython.boundscheck(False)
     @cython.wraparound(False)
     cdef void set_energies(self) nogil:
-        pass
-
-    @cython.boundscheck(False)
-    @cython.wraparound(False)
-    cdef double get_binding_energy(self, unsigned int site_index, unsigned int site_state) nogil:
-        """ Get binding energy for single site. """
-        cdef double energy
-        if self.ets.data.as_uints[site_index] == 1:
-            energy = self.alpha.data.as_doubles[site_state-1]
-        else:
-            energy = self.beta.data.as_doubles[site_state-1]
-        return energy
-
-
-cdef class cRecursiveMicrostates(cMicrostates):
-    """ Equivalent version in which arrays are ordered by L/R traversal. """
-
-    @cython.boundscheck(False)
-    @cython.wraparound(False)
-    cdef void set_energies(self) nogil:
-        cdef unsigned int site_state
-        cdef unsigned int index
+        cdef int site_state
+        cdef int index
         cdef double energy
 
         # run recursion
@@ -97,12 +92,12 @@ cdef class cRecursiveMicrostates(cMicrostates):
     @cython.boundscheck(False)
     @cython.wraparound(False)
     cdef void set_energy(self,
-                          unsigned int site_index,
-                          unsigned int site_state,
-                          unsigned int neighbor_state,
+                          int site_index,
+                          int site_state,
+                          int neighbor_state,
                           double E) nogil:
         """ Recursive set_energy function. """
-        cdef unsigned int new_state
+        cdef int new_state
 
         # if site is occupied, set energy value
         if site_state != 0:
@@ -121,22 +116,30 @@ cdef class cRecursiveMicrostates(cMicrostates):
             self.index += 1
 
 
-cdef class cIterativeMicrostates(cMicrostates):
+cdef class cIMS(cMS):
+    def __init__(self, *args):
+        cMS.__init__(self, *args)
+        self.reset()
+        self.set_energies()
 
-    cdef void reset(self):
-        """ Initialize binding energies and occupancy counts. """
-        self.E = clone(array('d'), self.Nm, True)
-        self.a = clone(array('I'), self.Nm*self.n, True)
+    cpdef np.ndarray get_E(self):
+        """ Returns microstate energies as np array. """
+        return np.array(self.E, dtype=np.float64).reshape(self.Nm)
 
     cpdef np.ndarray get_a(self):
         """ Returns microstate TF occupancy counts as np array. """
         return np.array(self.a, dtype=np.int64).reshape((self.b-1, self.Nm))
 
+    cdef void reset(self):
+        """ Initialize binding energies and occupancy counts. """
+        self.E = clone(array('d'), self.Nm, True)
+        self.a = clone(array('l'), self.Nm*self.n, True)
+
     @cython.boundscheck(False)
     @cython.wraparound(False)
     cdef void set_energies(self) nogil:
-        cdef unsigned int site_state
-        cdef unsigned int index
+        cdef int site_state
+        cdef int index
         cdef double energy
 
         # run recursion
@@ -150,15 +153,15 @@ cdef class cIterativeMicrostates(cMicrostates):
     @cython.boundscheck(False)
     @cython.wraparound(False)
     cdef void set_energy(self,
-                          unsigned int site_index,
-                          unsigned int site_state,
-                          unsigned int neighbor_microstate,
-                          unsigned int neighbor_state,
-                          unsigned int a1, unsigned int a2, double E) nogil:
+                          int site_index,
+                          int site_state,
+                          long long neighbor_microstate,
+                          int neighbor_state,
+                          int a1, int a2, double E) nogil:
         """ Recursive set_energy function. """
 
-        cdef unsigned int microstate
-        cdef unsigned int new_state
+        cdef long long microstate
+        cdef int new_state
 
         # get microstate
         microstate = neighbor_microstate + site_state*(self.b**site_index)
@@ -177,8 +180,8 @@ cdef class cIterativeMicrostates(cMicrostates):
                 a1 += 1
             else:
                 a2 += 1
-            self.a.data.as_uints[microstate] = a1
-            self.a.data.as_uints[self.Nm + microstate] = a2
+            self.a.data.as_longs[microstate] = a1
+            self.a.data.as_longs[self.Nm + microstate] = a2
 
         # recurse
         if site_index < (self.Ns - 1):
@@ -190,11 +193,11 @@ cdef class cIterativeMicrostates(cMicrostates):
     #     """ Returns a/b/g energy contributions to each microstate. """
 
     #     cdef array alpha, beta, gamma
-    #     cdef unsigned int index
+    #     cdef int index
     #     cdef double energy
-    #     cdef unsigned int j, k
+    #     cdef int j, k
     #     cdef array microstate
-    #     cdef unsigned int n, site_state, neighbor
+    #     cdef int n, site_state, neighbor
 
     #     alpha = clone(array('d'), self.Nm*2, True)
     #     beta = clone(array('d'), self.Nm*2, True)
@@ -255,18 +258,20 @@ class Microstates:
         self.params = params
 
         # set ets sites
-        site_indices = np.zeros(int(Ns), dtype=np.uint8)
+        site_indices = np.zeros(int(Ns), dtype=np.int32)
         for i in ets:
             site_indices[int(i)] = 1
-        self.ets = array('I', site_indices)
+        self.ets = array('l', site_indices)
 
-    def get_c_microstates(self, recursive=True, **kwargs):
+    def get_c_microstates(self, ms_type='base', **kwargs):
         """ Get cMicrostates object. """
         params = (self.Ns, self.b-1, self.params, self.ets)
-        if recursive:
-            ms = cRecursiveMicrostates(*params, **kwargs)
+        if ms_type == 'iterative':
+            ms = cIMS(*params, **kwargs)
+        elif ms_type == 'recursive':
+            ms = cRMS(*params, **kwargs)
         else:
-            ms = cIterativeMicrostates(*params, **kwargs)
+            ms = cMS(*params, **kwargs)
         return ms
 
     def get_mask(self, v, p, indices):
