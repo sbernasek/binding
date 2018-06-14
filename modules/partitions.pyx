@@ -43,7 +43,7 @@ cdef class cPF:
 
     @cython.boundscheck(False)
     @cython.wraparound(False)
-    cdef void set_occupancies(self) nogil:
+    cdef void set_occupancies(self) with gil:
         pass
 
     cdef void set_microstates(self, microstates):
@@ -74,7 +74,7 @@ cdef class cRecursiveLight(cPF):
 
     @cython.boundscheck(False)
     @cython.wraparound(False)
-    cdef void set_concentrations(self, int c_index) nogil:
+    cdef void set_concentrations(self, int c_index) with gil:
         """ Set concentration vector. """
         cdef double c0, c1
         c0 = self.C.data.as_doubles[c_index // self.density]
@@ -84,7 +84,7 @@ cdef class cRecursiveLight(cPF):
 
     @cython.boundscheck(False)
     @cython.wraparound(False)
-    cdef void set_occupancies(self) nogil:
+    cdef void set_occupancies(self) with gil:
         cdef int c_index, state
         cdef double p
 
@@ -110,7 +110,7 @@ cdef class cRecursiveLight(cPF):
                             int state,
                             int neighbor_state,
                             double deltaG,
-                            double degeneracy,) nogil:
+                            double degeneracy,) with gil:
 
         cdef int index
         cdef int new_state
@@ -155,7 +155,7 @@ cdef class cRecursiveLight(cPF):
 
     @cython.boundscheck(False)
     @cython.wraparound(False)
-    cdef void normalize(self) nogil:
+    cdef void normalize(self) with gil:
         """ Normalize occupancies by partition function value. """
         cdef int i
         cdef double occupancy
@@ -189,7 +189,7 @@ cdef class cRecursivePF(cPF):
 
     @cython.boundscheck(False)
     @cython.wraparound(False)
-    cdef void set_concentrations(self, int c_index) nogil:
+    cdef void set_concentrations(self, int c_index) with gil:
         """ Set concentration vector. """
         cdef double c0, c1
         c0 = self.C.data.as_doubles[c_index // self.density]
@@ -199,7 +199,7 @@ cdef class cRecursivePF(cPF):
 
     @cython.boundscheck(False)
     @cython.wraparound(False)
-    cdef void set_probabilities(self) nogil:
+    cdef void set_probabilities(self) with gil:
         cdef int i
         cdef int state
         cdef double Z
@@ -224,7 +224,7 @@ cdef class cRecursivePF(cPF):
     cdef double set_probability(self,
                           int site,
                           int state,
-                          double degeneracy) nogil:
+                          double degeneracy) with gil:
 
         cdef int new_state
         cdef double boltzmann_weight
@@ -254,7 +254,7 @@ cdef class cRecursivePF(cPF):
 
     @cython.boundscheck(False)
     @cython.wraparound(False)
-    cdef void set_occupancies(self) nogil:
+    cdef void set_occupancies(self) with gil:
         cdef int c_index, state, row
         cdef double p
 
@@ -274,7 +274,7 @@ cdef class cRecursivePF(cPF):
     cdef double set_occupancy(self,
                           int site,
                           int state,
-                          int row) nogil:
+                          int row) with gil:
         cdef int index
         cdef int new_state
         cdef double p = 0
@@ -352,7 +352,7 @@ cdef class cIterativePF(cPF):
 
     @cython.boundscheck(False)
     @cython.wraparound(False)
-    cdef void set_probabilities(self, int c_index) nogil:
+    cdef void set_probabilities(self, int c_index) with gil:
         """ Preallocate microstate probabilities for given concentration. """
 
         cdef int c0 = c_index // self.density
@@ -376,7 +376,7 @@ cdef class cIterativePF(cPF):
 
     @cython.boundscheck(False)
     @cython.wraparound(False)
-    cdef void set_occupancies(self) nogil:
+    cdef void set_occupancies(self) with gil:
         cdef int i, row
         cdef long long index, j, k, l
         cdef double p, occupancy
@@ -400,7 +400,7 @@ cdef class cIterativePF(cPF):
 
     @cython.boundscheck(False)
     @cython.wraparound(False)
-    cdef void c_preallocate_activities(self, array activity) nogil:
+    cdef void c_preallocate_activities(self, array activity) with gil:
         """ Get preallocated activity array. (used) """
 
         cdef int i, j
@@ -460,7 +460,8 @@ cdef class cIterativePF(cPF):
 
 
 cdef class cTest(cRecursiveLight):
-    pass
+    cdef dict cache
+
 
 
 
@@ -544,7 +545,7 @@ class PartitionFunction:
 cdef void c_set_occupancies(array probabilities,
                               array masks,
                               array occupancies,
-                              int Ns, int b, int Nc, int Nm) nogil:
+                              int Ns, int b, int Nc, int Nm) with gil:
 
     """ Pure cython implementation of set_occupancies. """
     cdef int i, j, k, index
