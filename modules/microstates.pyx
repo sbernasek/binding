@@ -189,65 +189,6 @@ cdef class cIMS(cMS):
                 self.set_energy(site_index+1, new_state, microstate, site_state, a1, a2, E)
 
 
-    # cpdef tuple get_energy_contributions(self):
-    #     """ Returns a/b/g energy contributions to each microstate. """
-
-    #     cdef array alpha, beta, gamma
-    #     cdef int index
-    #     cdef double energy
-    #     cdef int j, k
-    #     cdef array microstate
-    #     cdef int n, site_state, neighbor
-
-    #     alpha = clone(array('d'), self.Nm*2, True)
-    #     beta = clone(array('d'), self.Nm*2, True)
-    #     gamma = clone(array('d'), self.Nm*2, True)
-
-    #     # SET GROUND STATES
-    #     for index in xrange(1, self.b):
-    #         if self.ets.data.as_uints[0] == 1:
-    #             energy = self.alpha.data.as_doubles[index-1]
-    #             alpha.data.as_doubles[(index-1)*self.Nm + 0] = energy
-    #         else:
-    #             energy = self.beta.data.as_doubles[index-1]
-    #             beta.data.as_doubles[(index-1)*self.Nm + 0] = energy
-
-    #     # SET ALL OTHER STATES
-    #     for k in xrange(self.b, self.Nm):
-
-    #         # get microstate
-    #         n, microstate = get_ternary_repr(k) # note there are n+1 digits
-    #         site_state = microstate.data.as_uints[n]
-
-    #         # add N-1 neighbor's energy
-    #         neighbor = c_bits_to_int(microstate, n, self.b)
-    #         for j in xrange(self.b-1):
-    #             alpha.data.as_doubles[j*self.Nm + k] += alpha.data.as_doubles[j*self.Nm + neighbor]
-    #             beta.data.as_doubles[j*self.Nm + k] += beta.data.as_doubles[j*self.Nm + neighbor]
-    #             gamma.data.as_doubles[j*self.Nm + k] += gamma.data.as_doubles[j*self.Nm + neighbor]
-
-    #         # add binding energy
-    #         if self.ets.data.as_uints[n] == 1:
-    #             energy = self.alpha.data.as_doubles[site_state-1]
-    #             alpha.data.as_doubles[(site_state-1)*self.Nm + k] += energy
-    #         else:
-    #             energy = self.beta.data.as_doubles[site_state-1]
-    #             beta.data.as_doubles[(site_state-1)*self.Nm + k] += energy
-
-    #         # if N-1 neighbor shares same occupant, add gamma
-    #         if site_state == microstate.data.as_uints[n-1] and site_state != 0:
-    #             gamma.data.as_doubles[(site_state-1)*self.Nm + k] += self.gamma.data.as_doubles[site_state-1]
-
-    #     a = np.array(alpha, dtype=np.float64).reshape((self.b-1, self.Nm))
-    #     b = np.array(beta, dtype=np.float64).reshape((self.b-1, self.Nm))
-    #     g = np.array(gamma, dtype=np.float64).reshape((self.b-1, self.Nm))
-
-    #     return (a, b, g)
-
-
-
-
-
 class Microstates:
     def __init__(self, Ns, N_species=2, params=None, ets=(0,)):
 

@@ -47,25 +47,43 @@ class Equilibrium:
 class Sweep:
 
     def __init__(self, cmin=0, cmax=1, density=25, names=None):
+
         if names is None:
             names = dict(none=0, Pnt=1, Yan=2)
         self.names = names
+
+        cmin = self.get_tuple(cmin)
+        cmax = self.get_tuple(cmax)
+        density = self.get_tuple(density)
+        self.cmin = cmin
+        self.cmax = cmax
         self.density = density
-        self.C = np.linspace(cmin, cmax, density) * 1E-9
-        yy, xx = np.meshgrid(*(self.C,)*2)
-        self.concentrations = np.stack((xx, yy)).reshape(2, -1).T
+
+        cx = np.linspace(cmin[0], cmax[0], density[0]) * 1E-9
+        cy = np.linspace(cmin[1], cmax[1], density[1]) * 1E-9
+        self.Cx = cx
+        self.Cy = cy
+
+        xx, yy = np.meshgrid(*(cx, cy), indexing='xy')
+        self.concentrations = np.stack((xx.T, yy.T)).reshape(2, -1).T
         self.ets = None
         self.Ns = None
 
+    @staticmethod
+    def get_tuple(x):
+        if type(x) in (float, int, np.float64, np.int64):
+            return (x, x)
+        else:
+            return x
+
     def set_occupancies(self, microstates, method='recursive'):
         """ Get Ns x Nc x b occupancy array. """
-        pf = PartitionFunction(microstates, self.C)
-        if method == 'python':
-            self.occupancies = pf.get_occupancies()
-        else:
+        alist = []
+        for C in self.concentrations:
+            pf = PartitionFunction(microstates, C)
             occupancies = pf.c_get_occupancies(method=method)
-            self.occupancies = np.swapaxes(occupancies.T, 1, 2)
-
+            alist.append(occupancies.T.reshape(microstates.Ns, microstates.b))
+        self.occupancies = np.stack(alist, axis=1)
         self.total_occupancy = self.occupancies[:,:,1:].sum(axis=-1)
         self.ets = np.array([i for i, x in enumerate(microstates.ets) if x == 1]).reshape(-1, 1)
         self.Ns = microstates.Ns
@@ -73,11 +91,11 @@ class Sweep:
     def plot_occupancy(self, site=0, species='Pnt', **kwargs):
         """ Plot occupancy for an individual binding site. """
         if species.lower() == 'total':
-            zz = 1 - self.occupancies[site, :, 0].reshape(*(self.density,)*2)
+            zz = 1 - self.occupancies[site, :, 0].reshape(*self.density)
         else:
-            zz = self.occupancies[site, :, self.names[species]].reshape(*(self.density,)*2)
+            zz = self.occupancies[site, :, self.names[species]].reshape(*self.density)
 
-        fig = self.show(zz, species, **kwargs)
+        fig = self.show(zz.T, species, **kwargs)
         fig.suptitle('Site N={:d}'.format(site), fontsize=9)
         return fig
 
@@ -85,17 +103,17 @@ class Sweep:
         """ Plot overall occupancy across the entire element. """
 
         # get total occupancy
-        total = 1 - self.occupancies[:, :, 0].mean(axis=0).reshape(*(self.density,)*2)
+        total = 1 - self.occupancies[:, :, 0].mean(axis=0).reshape(*self.density)
         if mask is not None:
-            mask = total
+            mask = total.T
 
         if species.lower() == 'total':
             zz = total
             #zz = np.ones_like(zz) - zz
         else:
-            zz = self.occupancies[:, :, self.names[species]].mean(axis=0).reshape(*(self.density,)*2)
+            zz = self.occupancies[:, :, self.names[species]].mean(axis=0).reshape(*self.density)
 
-        fig = self.show(zz, species, mask=mask, **kwargs)
+        fig = self.show(zz.T, species, mask=mask, **kwargs)
         if title:
             fig.suptitle('Over all sites', fontsize=9)
         return fig
@@ -124,6 +142,7 @@ class Sweep:
         norm = Normalize(vmin, vmax)
         im = cmap(norm(zz))
 
+
         # apply mask as transparency
         if mask is not None:
             im[:, :, -1] = mask
@@ -135,22 +154,25 @@ class Sweep:
         ax.imshow(im)
         #ax.imshow(zz, cmap=cmap, vmin=vmin, vmax=vmax)
         ax.invert_yaxis()
-        ax.set_xlabel('Yan concentration (nM)')
-        ax.set_ylabel('Pnt concentration (nM)')
+        ax.set_xlabel('Pnt concentration (nM)')
+        ax.set_ylabel('Yan concentration (nM)')
         ax.set_aspect(1)
         self.format_ticks(ax)
 
         return fig
 
     def format_ticks(self, ax, format_x=True, format_y=True):
-        ticks = np.linspace(0, self.C.max(), 5)
-        tick_positions = np.interp(ticks, self.C, np.arange(self.C.size))
+
         if format_x:
+            xtx = np.linspace(0, self.Cx.max(), 5)
+            tick_positions = np.interp(xtx, self.Cx, np.arange(self.Cx.size))
             ax.set_xticks(tick_positions)
-            ax.set_xticklabels(['{:.0f}'.format(x) for x in ticks*1e9])
+            ax.set_xticklabels(['{:.0f}'.format(x) for x in xtx*1e9])
         if format_y:
+            ytx = np.linspace(0, self.Cy.max(), 5)
+            tick_positions = np.interp(ytx, self.Cy, np.arange(self.Cy.size))
             ax.set_yticks(tick_positions)
-            ax.set_yticklabels(['{:.0f}'.format(x) for x in ticks*1e9])
+            ax.set_yticklabels(['{:.0f}'.format(x) for x in ytx*1e9])
 
     def plot_contours(self, species='Pnt', variable='Pnt', fixed=0, cmap=plt.cm.viridis, figsize=(4, 4)):
 
@@ -159,14 +181,15 @@ class Sweep:
         variable_dim = self.names[variable]-1
         N = self.occupancies.shape[0]
         if variable_dim == 0:
-            occupancy = self.occupancies[:, :, species_dim].reshape(N, self.density, self.density)[:, :, fixed]
-            concentration = self.concentrations[:, variable_dim].reshape(self.density, self.density)[:, fixed] * 1e9
-            fixed_concentration = self.concentrations[:, 1].reshape(self.density, self.density)[0, fixed] * 1e9
+
+            occupancy = self.occupancies[:, :, species_dim].reshape(N, *self.density)[:, :, fixed]
+            concentration = self.concentrations[:, variable_dim].reshape(*self.density)[:, fixed] * 1e9
+            fixed_concentration = self.concentrations[:, 1].reshape(*self.density)[0, fixed] * 1e9
             fixed_species = 'Yan'
         elif variable_dim == 1:
-            occupancy = self.occupancies[:, :, species_dim].reshape(N, self.density, self.density)[:, fixed, :]
-            concentration = self.concentrations[:, variable_dim].reshape(self.density, self.density)[fixed, :] * 1e9
-            fixed_concentration = self.concentrations[:, 0].reshape(self.density, self.density)[fixed, 0] * 1e9
+            occupancy = self.occupancies[:, :, species_dim].reshape(N, *self.density)[:, fixed, :]
+            concentration = self.concentrations[:, variable_dim].reshape(*self.density)[fixed, :] * 1e9
+            fixed_concentration = self.concentrations[:, 0].reshape(*self.density)[fixed, 0] * 1e9
             fixed_species = 'Pnt'
 
         # create figure
@@ -214,10 +237,10 @@ class Sweep:
         # label fixed species
         variable_dim = self.names[variable]-1
         if variable_dim == 0:
-            fixed_concentration = self.concentrations[:, 1].reshape(self.density, self.density)[0, fixed] * 1e9
+            fixed_concentration = self.concentrations[:, 1].reshape(*self.density)[0, fixed] * 1e9
             fixed_species = 'Yan'
         elif variable_dim == 1:
-            fixed_concentration = self.concentrations[:, 0].reshape(self.density, self.density)[fixed, 0] * 1e9
+            fixed_concentration = self.concentrations[:, 0].reshape(*self.density)[fixed, 0] * 1e9
             fixed_species = 'Pnt'
         fig.suptitle('Fixed {:0.1f} nM {:s}'.format(fixed_concentration, fixed_species), fontsize=9)
 
@@ -243,7 +266,11 @@ class Sweep:
         # create main axis
         ax1 = plt.subplot(gs[1])
         ax1.set_ylim(0, 1)
-        ax1.set_xlim(self.C.min()*1e9, self.C.max()*1e9)
+        if variable_dim == 0:
+            ax1.set_xlim(self.Cx.min()*1e9, self.Cx.max()*1e9)
+        else:
+            ax1.set_xlim(self.Cy.min()*1e9, self.Cy.max()*1e9)
+
         ax1.set_ylabel('Fractional occupancy ({:s})'.format(variable), fontsize=8)
         ax1.set_xlabel('{:s} concentration (nM)'.format(variable), fontsize=8)
 
@@ -256,11 +283,11 @@ class Sweep:
         variable_dim = self.names[variable]-1
         N = self.occupancies.shape[0]
         if variable_dim == 0:
-            occupancy = self.occupancies[:, :, species_dim].reshape(N, self.density, self.density)[:, :, fixed]
-            concentration = self.concentrations[:, variable_dim].reshape(self.density, self.density)[:, fixed] * 1e9
+            occupancy = self.occupancies[:, :, species_dim].reshape(N, *self.density)[:, :, fixed]
+            concentration = self.concentrations[:, variable_dim].reshape(*self.density)[:, fixed] * 1e9
         elif variable_dim == 1:
-            occupancy = self.occupancies[:, :, species_dim].reshape(N, self.density, self.density)[:, fixed, :]
-            concentration = self.concentrations[:, variable_dim].reshape(self.density, self.density)[fixed, :] * 1e9
+            occupancy = self.occupancies[:, :, species_dim].reshape(N, *self.density)[:, fixed, :]
+            concentration = self.concentrations[:, variable_dim].reshape(*self.density)[fixed, :] * 1e9
 
         # plot occupancy contour(s)
         if overall:
