@@ -190,7 +190,19 @@ cdef class cIMS(cMS):
 
 
 class Microstates:
+
+    """ Class defines a single element bound by one or more proteins. """
+
     def __init__(self, Ns, N_species=2, params=None, ets=(0,)):
+        """
+
+        Args:
+        Ns (int) - number of binding sites
+        N_species (int) - number of binding species
+        params (dict[param]=tuple) - parameter values, e.g. alpha, beta, gamma
+        ets (tuple) - positional indices of strong binding sites
+
+        """
 
         # set system size
         self.Ns = Ns
