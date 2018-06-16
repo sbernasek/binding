@@ -4,7 +4,7 @@ from Cython.Distutils import build_ext
 from numpy import get_include
 
 ext_modules = [
-    Extension("microstates",["microstates.pyx"],
+    Extension("elements",["elements.pyx"],
               include_dirs=['.']),
     Extension("partitions",["partitions.pyx"],
               include_dirs=['.'])]

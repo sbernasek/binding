@@ -10,7 +10,7 @@ from cpython.array cimport array, clone
 from libc.math cimport exp
 
 # import microstates
-from microstates cimport cMS
+from elements cimport cElement
 
 
 cdef class cPF:
@@ -23,15 +23,15 @@ cdef class cPF:
     cdef array C
     cdef array occupancies
     cdef double Z
-    cdef cMS ms
+    cdef cElement element
 
-    def __init__(self, microstates, concentrations):
-        self.Ns = microstates.Ns
-        self.Nm = microstates.Nm
-        self.b = microstates.b
-        self.n = microstates.b-1
+    def __init__(self, element, concentrations):
+        self.Ns = element.Ns
+        self.Nm = element.Nm
+        self.b = element.b
+        self.n = element.b-1
         self.C = array('d', concentrations)
-        self.set_microstates(microstates)
+        self.set_element(element)
 
     cpdef array get_occupancies(self):
         """ Get flattened b x Ns occupancy array. """
@@ -39,9 +39,9 @@ cdef class cPF:
         self.set_occupancies()
         return self.occupancies
 
-    cdef void set_microstates(self, microstates):
+    cdef void set_element(self, element):
         """ Set microstate energies. """
-        self.ms = microstates.get_c_microstates(ms_type='base')
+        self.element = element.get_c_element(element_type='base')
 
     cdef void reset(self):
         """ Initialize probabilities and occupancies with zeros. """
@@ -82,9 +82,9 @@ cdef class cPF:
         if state != 0:
 
             # update microstate free energy
-            deltaG += self.ms.get_binding_energy(site, state)
+            deltaG += self.element.get_binding_energy(site, state)
             if state == neighbor_state:
-                deltaG += self.ms.gamma.data.as_doubles[state-1]
+                deltaG += self.element.gamma.data.as_doubles[state-1]
 
             # update microstate degeneracy
             degeneracy *= self.C.data.as_doubles[state-1]
@@ -100,7 +100,7 @@ cdef class cPF:
         if state != 0:
 
             # evaluate (non-normalized) partition
-            boltzmann_factor = exp(-deltaG/(self.ms.R*self.ms.T))*degeneracy
+            boltzmann_factor = exp(-deltaG/(self.element.R*self.element.T))*degeneracy
             p += boltzmann_factor
 
             # assign probabilities to current site/occupant pair
@@ -129,16 +129,16 @@ cdef class cPF_test(cPF):
 
 
 class PartitionFunction:
-    def __init__(self, microstates, concentrations):
+    def __init__(self, element, concentrations):
 
         # get system dimensions
-        self.Ns = microstates.Ns
-        self.b = microstates.b
-        self.n = microstates.b - 1
+        self.Ns = element.Ns
+        self.b = element.b
+        self.n = element.b - 1
 
         # extra for python version
-        self.Nm = microstates.Nm
-        self.microstates = microstates
+        self.Nm = element.Nm
+        self.element = element
         self.concentrations = concentrations
 
     def c_get_occupancies(self, method='base'):
@@ -146,9 +146,9 @@ class PartitionFunction:
 
         # instantiate partition function
         if method == 'test':
-            c_pf = cPF_test(self.microstates, self.concentrations)
+            c_pf = cPF_test(self.element, self.concentrations)
         else:
-            c_pf = cPF(self.microstates, self.concentrations)
+            c_pf = cPF(self.element, self.concentrations)
 
         # convert array to ndarray
         shape = (self.b-1, self.Ns)

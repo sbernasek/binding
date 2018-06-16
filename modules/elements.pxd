@@ -6,7 +6,7 @@ cimport numpy as np
 from cpython.array cimport array
 
 
-cdef class cMS:
+cdef class cElement:
 
     # attributes
     cdef double R
@@ -25,7 +25,7 @@ cdef class cMS:
     cdef double get_binding_energy(self, int site_index, int site_state) nogil
 
 
-cdef class cRMS(cMS):
+cdef class cRecursiveElement(cElement):
 
     # attributes
     cdef array E
@@ -41,7 +41,7 @@ cdef class cRMS(cMS):
                           int neighbor_state,
                           double E) nogil
 
-cdef class cIMS(cMS):
+cdef class cIterativeElement(cElement):
 
     # attributes
     cdef array E

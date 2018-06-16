@@ -11,7 +11,7 @@ from bits cimport get_ternary_repr, c_bits_to_int
 from libc.math cimport exp
 
 
-cdef class cMS:
+cdef class cElement:
 
     def __init__(self, int Ns,
                  int N_species,
@@ -57,10 +57,10 @@ cdef class cMS:
         return energy
 
 
-cdef class cRMS(cMS):
+cdef class cRecursiveElement(cElement):
     """ Equivalent version in which arrays are ordered by L/R traversal. """
     def __init__(self, *args):
-        cMS.__init__(self, *args)
+        cElement.__init__(self, *args)
         self.reset()
         self.set_energies()
 
@@ -116,9 +116,9 @@ cdef class cRMS(cMS):
             self.index += 1
 
 
-cdef class cIMS(cMS):
+cdef class cIterativeElement(cElement):
     def __init__(self, *args):
-        cMS.__init__(self, *args)
+        cElement.__init__(self, *args)
         self.reset()
         self.set_energies()
 
@@ -189,7 +189,7 @@ cdef class cIMS(cMS):
                 self.set_energy(site_index+1, new_state, microstate, site_state, a1, a2, E)
 
 
-class Microstates:
+class Element:
 
     """ Class defines a single element bound by one or more proteins. """
 
@@ -201,7 +201,6 @@ class Microstates:
         N_species (int) - number of binding species
         params (dict[param]=tuple) - parameter values, e.g. alpha, beta, gamma
         ets (tuple) - positional indices of strong binding sites
-
         """
 
         # set system size
@@ -216,16 +215,16 @@ class Microstates:
             site_indices[int(i)] = 1
         self.ets = array('l', site_indices)
 
-    def get_c_microstates(self, ms_type='base', **kwargs):
+    def get_c_element(self, element_type='base', **kwargs):
         """ Get cMicrostates object. """
         params = (self.Ns, self.b-1, self.params, self.ets)
-        if ms_type == 'iterative':
-            ms = cIMS(*params, **kwargs)
-        elif ms_type == 'recursive':
-            ms = cRMS(*params, **kwargs)
+        if element_type == 'iterative':
+            element = cIterativeElement(*params, **kwargs)
+        elif element_type == 'recursive':
+            element = cRecursiveElement(*params, **kwargs)
         else:
-            ms = cMS(*params, **kwargs)
-        return ms
+            element = cElement(*params, **kwargs)
+        return element
 
     def get_mask(self, v, p, indices):
         return ((indices//(self.b**p)) % self.b) == v

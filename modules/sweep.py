@@ -67,20 +67,20 @@ class ConcentrationSweep:
         else:
             return x
 
-    def get_occupancies(self, microstates):
+    def get_occupancies(self, element):
         """
         Evaluate binding site occupancies.
 
         Args:
-        microstates (Microstates instance) - binding element
+        element (Element instance) - binding element
         """
-        return Occupancies(microstates, **self.__dict__)
+        return Occupancies(element, **self.__dict__)
 
 
 class Occupancies(ConcentrationSweep):
     """ Defines occupancies of an element under a set of concentrations. """
 
-    def __init__(self, microstates, **kwargs):
+    def __init__(self, element, **kwargs):
         ConcentrationSweep.__init__(self, **kwargs)
 
         # set concentrations
@@ -90,19 +90,19 @@ class Occupancies(ConcentrationSweep):
         self.concentrations = np.stack((xx.T, yy.T)).reshape(2, -1).T
 
         # set occupancies
-        self.set_occupancies(microstates)
+        self.set_occupancies(element)
 
-    def set_occupancies(self, microstates, method='base'):
+    def set_occupancies(self, element, method='base'):
         """ Get Ns x Nc x b occupancy array. """
         alist = []
         for C in self.concentrations:
-            pf = PartitionFunction(microstates, C)
+            pf = PartitionFunction(element, C)
             occupancies = pf.c_get_occupancies(method=method)
-            alist.append(occupancies.T.reshape(microstates.Ns, microstates.b))
+            alist.append(occupancies.T.reshape(element.Ns, element.b))
         self.occupancies = np.stack(alist, axis=1)
         self.total_occupancy = self.occupancies[:,:,1:].sum(axis=-1)
-        self.ets = np.array([i for i, x in enumerate(microstates.ets) if x == 1]).reshape(-1, 1)
-        self.Ns = microstates.Ns
+        self.ets = np.array([i for i, x in enumerate(element.ets) if x == 1]).reshape(-1, 1)
+        self.Ns = element.Ns
         self.fit_model()
 
     def plot_occupancy(self, site=0, species='Pnt', **kwargs):
