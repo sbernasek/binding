@@ -67,20 +67,20 @@ class ConcentrationSweep:
         else:
             return x
 
-    def get_occupancies(self, element):
+    def get_occupancies(self, element, parallel=False):
         """
         Evaluate binding site occupancies.
 
         Args:
         element (Element instance) - binding element
         """
-        return Occupancies(element, **self.__dict__)
+        return Occupancies(element, parallel=parallel, **self.__dict__)
 
 
 class Occupancies(ConcentrationSweep):
     """ Defines occupancies of an element under a set of concentrations. """
 
-    def __init__(self, element, **kwargs):
+    def __init__(self, element, parallel=False, **kwargs):
         ConcentrationSweep.__init__(self, **kwargs)
 
         # set concentrations
@@ -90,7 +90,10 @@ class Occupancies(ConcentrationSweep):
         self.concentrations = np.stack((xx.T, yy.T)).reshape(2, -1).T
 
         # set occupancies
-        self.set_occupancies(element)
+        if parallel:
+            self.set_occupancies_parallel(element)
+        else:
+            self.set_occupancies(element)
 
     def set_occupancies(self, element, method='base'):
         """ Get Ns x Nc x b occupancy array. """
@@ -100,6 +103,16 @@ class Occupancies(ConcentrationSweep):
             occupancies = pf.c_get_occupancies(method=method)
             alist.append(occupancies.T.reshape(element.Ns, element.b))
         self.occupancies = np.stack(alist, axis=1)
+        self.total_occupancy = self.occupancies[:,:,1:].sum(axis=-1)
+        self.ets = np.array([i for i, x in enumerate(element.ets) if x == 1]).reshape(-1, 1)
+        self.Ns = element.Ns
+        self.fit_model()
+
+    def set_occupancies_parallel(self, element):
+        """ Get Ns x Nc x b occupancy array. """
+        pf = PartitionFunction(element, self.concentrations)
+        occupancies = pf.c_get_occupancies_parallel()
+        self.occupancies = np.swapaxes(occupancies, 1, 2)
         self.total_occupancy = self.occupancies[:,:,1:].sum(axis=-1)
         self.ets = np.array([i for i, x in enumerate(element.ets) if x == 1]).reshape(-1, 1)
         self.Ns = element.Ns

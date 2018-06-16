@@ -40,10 +40,11 @@ cdef class cElement:
 
     cdef void set_params(self, dict params):
         cdef int index
+        cdef double nRT = -1/(self.R*self.T)
         for index in xrange(self.b-1):
-            self.alpha.data.as_doubles[index] = params['alpha'][index]
-            self.beta.data.as_doubles[index] = params['beta'][index]
-            self.gamma.data.as_doubles[index] = params['gamma'][index]
+            self.alpha.data.as_doubles[index] = params['alpha'][index] * nRT
+            self.beta.data.as_doubles[index] = params['beta'][index] * nRT
+            self.gamma.data.as_doubles[index] = params['gamma'][index] * nRT
 
     @cython.boundscheck(False)
     @cython.wraparound(False)
