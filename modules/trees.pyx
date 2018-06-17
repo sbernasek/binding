@@ -36,9 +36,16 @@ cdef class cTree:
         self.initialize()
 
     cdef void initialize(self):
+
+        # truncate weights + degeneracy arrays to cut point
+        cdef int Ns = self.cut_point + 2
+
         """ Initialize all arrays with zeros. """
-        cdef np.ndarray w = np.zeros(self.Ns*self.Nc, dtype=np.float64)
-        cdef np.ndarray d = np.ones((self.Ns+1)*self.Nc, dtype=np.float64)
+        cdef np.ndarray w = np.zeros(Ns*self.Nc, dtype=np.float64)
+        cdef np.ndarray d = np.ones((Ns+1)*self.Nc, dtype=np.float64)
+
+        #cdef np.ndarray w = np.zeros(self.Ns*self.Nc, dtype=np.float64)
+        #cdef np.ndarray d = np.ones((self.Ns+1)*self.Nc, dtype=np.float64)
         self.weights = array('d', w)
         self.degeneracy = array('d', d)
         self.occupancies = clone(array('d'), self.Ns*self.n*self.Nc, True)
@@ -225,12 +232,6 @@ cdef class cSubTree(cTree):
         # copy parent degeneracy to bottom level and initialize Z
         for c_index in xrange(self.Nc):
             degeneracy = tree.degeneracy.data.as_doubles[row+c_index]
-
-            # DEGENERACY IS AP ROBLEM
-            # # update degeneracy for current branch
-            # if branch != 0:
-            #     degeneracy = degeneracy * tree.C.data.as_doubles[index+c_index]
-
             self.degeneracy.data.as_doubles[c_index] = degeneracy
             self.Z.data.as_doubles[c_index] = 0.
 
