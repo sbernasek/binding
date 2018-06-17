@@ -28,8 +28,6 @@ cdef class cTree:
     cdef array occupancies
     cdef array Z
 
-    cdef int flag
-
     # methods
     cdef void initialize(self)
 

@@ -32,8 +32,6 @@ cdef class cTree:
         self.Nc = Nc
         self.C = C
 
-        self.flag = 0
-
         # initialize occupancies as zero
         self.initialize()
 
@@ -90,20 +88,18 @@ cdef class cTree:
 
         # instantiate and traverse subtree
         cdef cSubTree child = cSubTree(self, site, state)
-
         child.walk(0, state, neighbor_state, deltaG)
 
         # inherit weights, occupancies, and partition function
         for c_index in xrange(self.Nc):
 
             # update weights (add top level)
-            weight = self.weights.data.as_doubles[row+c_index] + child.weights.data.as_doubles[c_index]
+            weight = child.weights.data.as_doubles[c_index]
             self.weights.data.as_doubles[row+c_index] = weight
 
             # update partition function (add total)
             z = self.Z.data.as_doubles[c_index] + child.Z.data.as_doubles[c_index]
             self.Z.data.as_doubles[c_index] = z
-
 
         # update occupancies (add all)
         for i in xrange(child.Ns):
@@ -125,12 +121,6 @@ cdef class cTree:
                     int neighbor_state,
                     double deltaG) with gil:
         """ Visit child. """
-
-        if site == 0:
-            if state == 1:
-                self.flag = 1
-            else:
-                self.flag = 0
 
         # indices
         cdef int index
@@ -178,10 +168,6 @@ cdef class cTree:
             for c_index in xrange(self.Nc):
                 degeneracy = self.degeneracy.data.as_doubles[row+c_index]
                 self.degeneracy.data.as_doubles[crow+c_index] = degeneracy
-
-        # if self.flag == 1:
-        #     print(site, state, self.degeneracy.data.as_doubles[row])
-        #     print('\n')
 
         # recursion (traverse child microstates)
         if site < (self.Ns - 1):
@@ -289,13 +275,6 @@ cdef class cSubTree(cTree):
         cdef int row = site * self.Nc
         cdef int crow = row + self.Nc
 
-        # set flag
-        if site == 0:
-            if state == 1:
-                self.flag = 1
-            else:
-                self.flag = 0
-
         # initialize the weights for current site as zero
         for c_index in xrange(self.Nc):
             self.weights.data.as_doubles[row+c_index] = 0
@@ -320,9 +299,6 @@ cdef class cSubTree(cTree):
             for c_index in xrange(self.Nc):
                 degeneracy = self.degeneracy.data.as_doubles[row+c_index]
                 self.degeneracy.data.as_doubles[crow+c_index] = degeneracy
-
-        # if self.flag == 1:
-        #     print(site, state, self.degeneracy.data.as_doubles[row])
 
         # recursion (traverse child microstates)
         if site < (self.Ns - 1):
