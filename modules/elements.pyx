@@ -13,11 +13,14 @@ from libc.math cimport exp
 
 cdef class cElement:
 
-    def __init__(self, int Ns,
+    def __init__(self,
+                 int Ns,
                  int N_species,
                  dict params,
                  array ets,
-                 double R = 1.987204118*1E-3, double T = 300):
+                 double R = 1.987204118*1E-3,
+                 double T = 300,
+                 int scale = 1):
 
         # set conditions
         self.R = R
@@ -33,14 +36,20 @@ cdef class cElement:
         self.alpha = clone(array('d'), N_species, False)
         self.beta = clone(array('d'), N_species, False)
         self.gamma = clone(array('d'), N_species, False)
-        self.set_params(params)
+        self.set_params(params, scale)
 
         # define ETS sites
         self.ets = ets
 
-    cdef void set_params(self, dict params):
+    cdef void set_params(self, dict params, int scale):
         cdef int index
         cdef double nRT = -1/(self.R*self.T)
+
+        # get scaling
+        if scale == 0:
+            nRT = 1
+
+        # set parameters
         for index in xrange(self.b-1):
             self.alpha.data.as_doubles[index] = params['alpha'][index] * nRT
             self.beta.data.as_doubles[index] = params['beta'][index] * nRT
@@ -48,7 +57,7 @@ cdef class cElement:
 
     @cython.boundscheck(False)
     @cython.wraparound(False)
-    cdef double get_binding_energy(self, int site_index, int site_state) nogil:
+    cdef double get_binding_energy(self, int site_index, int site_state) with gil:
         """ Get binding energy for single site. """
         cdef double energy
         if self.ets.data.as_longs[site_index] == 1:
@@ -56,6 +65,24 @@ cdef class cElement:
         else:
             energy = self.beta.data.as_doubles[site_state-1]
         return energy
+
+    cdef cElement truncate(self, int cut_point):
+        """ Shortens element by removing sites before specified cut point. """
+
+        cdef int Ns = self.Ns - cut_point
+        cdef int index
+        cdef dict params
+        cdef array ets
+
+        # get params
+        params = dict(alpha=self.alpha, beta=self.beta, gamma=self.gamma)
+
+        # truncate ets sites
+        ets = clone(array('l'), Ns, True)
+        for index in xrange(Ns):
+            ets.data.as_longs[index] = self.ets.data.as_longs[cut_point+index]
+
+        return cElement(Ns, self.n, params, ets, self.R, self.T, 0)
 
 
 cdef class cRecursiveElement(cElement):
@@ -75,7 +102,7 @@ cdef class cRecursiveElement(cElement):
 
     @cython.boundscheck(False)
     @cython.wraparound(False)
-    cdef void set_energies(self) nogil:
+    cdef void set_energies(self) with gil:
         cdef int site_state
         cdef int index
         cdef double energy
@@ -96,7 +123,7 @@ cdef class cRecursiveElement(cElement):
                           int site_index,
                           int site_state,
                           int neighbor_state,
-                          double E) nogil:
+                          double E) with gil:
         """ Recursive set_energy function. """
         cdef int new_state
 
@@ -138,7 +165,7 @@ cdef class cIterativeElement(cElement):
 
     @cython.boundscheck(False)
     @cython.wraparound(False)
-    cdef void set_energies(self) nogil:
+    cdef void set_energies(self) with gil:
         cdef int site_state
         cdef int index
         cdef double energy
@@ -158,7 +185,7 @@ cdef class cIterativeElement(cElement):
                           int site_state,
                           long long neighbor_microstate,
                           int neighbor_state,
-                          int a1, int a2, double E) nogil:
+                          int a1, int a2, double E) with gil:
         """ Recursive set_energy function. """
 
         cdef long long microstate
@@ -220,11 +247,11 @@ class Element:
         """ Get cMicrostates object. """
         params = (self.Ns, self.b-1, self.params, self.ets)
         if element_type == 'iterative':
-            element = cIterativeElement(*params, **kwargs)
+            element = cIterativeElement(*params, scale=1, **kwargs)
         elif element_type == 'recursive':
-            element = cRecursiveElement(*params, **kwargs)
+            element = cRecursiveElement(*params, scale=1, **kwargs)
         else:
-            element = cElement(*params, **kwargs)
+            element = cElement(*params, scale=1, **kwargs)
         return element
 
     def get_mask(self, v, p, indices):

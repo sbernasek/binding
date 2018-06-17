@@ -4,10 +4,9 @@ from Cython.Distutils import build_ext
 from numpy import get_include
 
 ext_modules = [
-    Extension("elements",["elements.pyx"],
-              include_dirs=['.']),
-    Extension("partitions",["partitions.pyx"],
-              include_dirs=['.'])]
+    Extension("elements",["elements.pyx"], include_dirs=['.']),
+    Extension("trees",["trees.pyx"], include_dirs=['.']),
+    Extension("partitions",["partitions.pyx"], include_dirs=['.'])]
               #extra_compile_args=['-fopenmp'],
               #extra_link_args=['-fopenmp'])]
 

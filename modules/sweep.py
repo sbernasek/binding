@@ -67,20 +67,22 @@ class ConcentrationSweep:
         else:
             return x
 
-    def get_occupancies(self, element, parallel=False):
+    def get_occupancies(self, element, parallel=False, cut=None):
         """
         Evaluate binding site occupancies.
 
         Args:
         element (Element instance) - binding element
+        parallel (bool) - if True, use parallel implementation
+        cut (int) - trees are parallelized below cut point
         """
-        return Occupancies(element, parallel=parallel, **self.__dict__)
+        return Occupancies(element, parallel, cut, **self.__dict__)
 
 
 class Occupancies(ConcentrationSweep):
     """ Defines occupancies of an element under a set of concentrations. """
 
-    def __init__(self, element, parallel=False, **kwargs):
+    def __init__(self, element, parallel=False, cut=None, **kwargs):
         ConcentrationSweep.__init__(self, **kwargs)
 
         # set concentrations
@@ -91,7 +93,7 @@ class Occupancies(ConcentrationSweep):
 
         # set occupancies
         if parallel:
-            self.set_occupancies_parallel(element)
+            self.set_occupancies_parallel(element, cut=cut)
         else:
             self.set_occupancies(element)
 
@@ -108,10 +110,10 @@ class Occupancies(ConcentrationSweep):
         self.Ns = element.Ns
         self.fit_model()
 
-    def set_occupancies_parallel(self, element):
+    def set_occupancies_parallel(self, element, cut=None):
         """ Get Ns x Nc x b occupancy array. """
         pf = PartitionFunction(element, self.concentrations)
-        occupancies = pf.c_get_occupancies_parallel()
+        occupancies = pf.c_get_occupancies_parallel(cut)
         self.occupancies = np.swapaxes(occupancies, 1, 2)
         self.total_occupancy = self.occupancies[:,:,1:].sum(axis=-1)
         self.ets = np.array([i for i, x in enumerate(element.ets) if x == 1]).reshape(-1, 1)

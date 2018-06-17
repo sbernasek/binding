@@ -6,3 +6,4 @@ modules/build/*
 *.so
 *.h
 notebooks/.ipynb_checkpoints/*
+*.npy

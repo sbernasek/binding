@@ -21,8 +21,9 @@ cdef class cElement:
     cdef array ets
 
     # methods
-    cdef void set_params(self, dict params)
-    cdef double get_binding_energy(self, int site_index, int site_state) nogil
+    cdef void set_params(self, dict params, int scale)
+    cdef double get_binding_energy(self, int site_index, int site_state) with gil
+    cdef cElement truncate(self, int cut_point)
 
 
 cdef class cRecursiveElement(cElement):
@@ -34,12 +35,12 @@ cdef class cRecursiveElement(cElement):
     # methods
     cpdef np.ndarray get_E(self)
     cdef void reset(self)
-    cdef void set_energies(self) nogil
+    cdef void set_energies(self) with gil
     cdef void set_energy(self,
                           int site_index,
                           int site_state,
                           int neighbor_state,
-                          double E) nogil
+                          double E) with gil
 
 cdef class cIterativeElement(cElement):
 
@@ -51,11 +52,11 @@ cdef class cIterativeElement(cElement):
     cpdef np.ndarray get_E(self)
     cpdef np.ndarray get_a(self)
     cdef void reset(self)
-    cdef void set_energies(self) nogil
+    cdef void set_energies(self) with gil
     cdef void set_energy(self,
                           int site_index,
                           int site_state,
                           long long neighbor_microstate,
                           int neighbor_state,
-                          int a1, int a2, double E) nogil
+                          int a1, int a2, double E) with gil
 
