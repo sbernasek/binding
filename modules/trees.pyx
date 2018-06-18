@@ -14,19 +14,44 @@ from elements cimport cElement
 
 
 cdef class cTree:
+    """
+    Defines a ternary tree that is traversed sequentially until a pre-defined cut point at which parallel branching occurs.
+
+    Attributes:
+    element (cElement instance) - binding site element
+    cut_point (long) - binding site before parallel branching
+    Nc (int) - number of unique protein concentration pairs
+    C (array) - protein concentrations, flattened 2 x Nc
+    weights (array) - boltzmann weights, flattened array
+    degeneracy (array) - degeneracy terms, flattened (Ns+1) x Nc
+    occupancies (array) - binding site occupancies, flattened Ns x N x Nc
+    Z (array) - partition function values, 1 x Nc array
+    shift (long) - index for current node
+    cshift (long) - index for subsequent node
+
+    Notes:
+    - degeneracy array is used for passing degeneracy terms down the tree
+    - weights array is used for passing boltzmann weights up the tree
+    - weights/occupancies are not normalized during recursion
+
+    """
 
     def __init__(self,
                  cElement element,
                  int Nc,
                  array C,
                  int cut_point):
+        """
+        Args:
+        element (cElement) - binding element instance
+        Nc (long) - number of unique protein concentration pairs
+        C (array) - protein concentrations, flattened 2 x Nc array
+        cut_point (long) - binding site before parallel branching
+        """
 
         # set tree properties
         self.element = element
-        self.Ns = element.Ns
         self.cut_point = cut_point
-        self.b = element.b
-        self.n = element.n
 
         # set concentrations
         self.Nc = Nc
@@ -36,311 +61,366 @@ cdef class cTree:
         self.initialize()
 
     cdef void initialize(self):
+        """ Initialize all arrays with zeros. """
 
         # truncate weights + degeneracy arrays to cut point
         cdef int Ns = self.cut_point + 2
-
-        """ Initialize all arrays with zeros. """
         cdef np.ndarray w = np.zeros(Ns*self.Nc, dtype=np.float64)
         cdef np.ndarray d = np.ones((Ns+1)*self.Nc, dtype=np.float64)
 
-        #cdef np.ndarray w = np.zeros(self.Ns*self.Nc, dtype=np.float64)
-        #cdef np.ndarray d = np.ones((self.Ns+1)*self.Nc, dtype=np.float64)
         self.weights = array('d', w)
         self.degeneracy = array('d', d)
-        self.occupancies = clone(array('d'), self.Ns*self.n*self.Nc, True)
+        self.occupancies = clone(array('d'), self.element.Ns*self.element.n*self.Nc, True)
         self.Z = array('d', np.ones(self.Nc, dtype=np.float64))
 
     @cython.boundscheck(False)
     @cython.wraparound(False)
     cdef void traverse(self):
+        """ Traverse all nodes. """
         cdef int state
-
-        # run recursion
-        for state in xrange(self.b):
-            self.walk(0, state, 0, 0.)
+        for state in xrange(self.element.b):
+            self.update_branch(0, state, 0, 0.)
 
     @cython.boundscheck(False)
     @cython.wraparound(False)
-    cdef void walk(self,
+    cdef void update_branch(self,
                    int site,
                    int state,
                    int neighbor_state,
-                   double deltaG) with gil:
-        """ Visit all children. """
+                   double deltaG):
+        """ Update branch of tree. """
 
-        # instantiate and traverse subtree
+        # instantiate and traverse branch
         if site > self.cut_point:
-            self.branch(site, state, neighbor_state, deltaG)
+            self.create_subtree(site, state, neighbor_state, deltaG)
         else:
-            self.step(site, state, neighbor_state, deltaG)
+            self.update_node(site, state, neighbor_state, deltaG)
 
     @cython.boundscheck(False)
     @cython.wraparound(False)
-    cdef void branch(self,
+    cdef void create_subtree(self,
                     int site,
                     int state,
                     int neighbor_state,
-                    double deltaG) with gil:
-        """ Instantiate and traverse independent child tree. """
+                    double deltaG):
+        """ Instantiate and traverse independent branch. """
 
-        cdef int row = site * self.Nc
-        cdef int crow
-        cdef int i, j, k
-        cdef int index, child_index
-
-        cdef double weight
+        cdef int i
+        cdef int zshift = site * self.Nc
+        cdef int oshift = site * self.element.n * self.Nc
         cdef double z
         cdef double occupancy
 
-        # instantiate and traverse subtree
-        cdef cSubTree child = cSubTree(self, site, state)
-        child.walk(0, state, neighbor_state, deltaG)
+        # instantiate and traverse branch
+        cdef cBranch child = cBranch(self, site, state)
+        child.update_node_nogil(0, state, neighbor_state, deltaG)
 
         # inherit weights, occupancies, and partition function
-        for c_index in xrange(self.Nc):
+        for i in xrange(self.Nc):
 
-            # update weights (add top level)
-            weight = child.weights.data.as_doubles[c_index]
-            self.weights.data.as_doubles[row+c_index] = weight
+            # inherit weights (copy top level)
+            self.weights.data.as_doubles[zshift+i] = child.weights.data.as_doubles[i]
 
-            # update partition function (add total)
-            z = self.Z.data.as_doubles[c_index] + child.Z.data.as_doubles[c_index]
-            self.Z.data.as_doubles[c_index] = z
+            # increment partition function (add total)
+            z = self.Z.data.as_doubles[i] + child.Z.data.as_doubles[i]
+            self.Z.data.as_doubles[i] = z
 
-        # update occupancies (add all)
-        for i in xrange(child.Ns):
-            crow = i*self.n*self.Nc
-            row = (i+site)*self.n*self.Nc
-            for j in xrange(self.n):
-                col = j*self.Nc
-                for k in xrange(self.Nc):
-                    child_index = crow+col+k
-                    index = row+col+k
-                    occupancy = self.occupancies.data.as_doubles[index] + child.occupancies.data.as_doubles[child_index]
-                    self.occupancies.data.as_doubles[index] = occupancy
+        # update occupancies
+        for i in xrange(child.element.Ns*self.element.n*self.Nc):
+            occupancy = self.occupancies.data.as_doubles[oshift+i] + child.occupancies.data.as_doubles[i]
+            self.occupancies.data.as_doubles[oshift+i] = occupancy
 
     @cython.boundscheck(False)
     @cython.wraparound(False)
-    cdef void step(self,
+    cdef void update_node(self,
                     int site,
                     int state,
                     int neighbor_state,
-                    double deltaG) with gil:
-        """ Visit child. """
+                    double deltaG):
+        """
+        Update current node.
 
-        # indices
-        cdef int index
-        cdef int c_index
-        cdef int new_state
+        Args:
+        site (long) - index of current node
+        state (long) - index of current branch
+        neighbor_state (long) - index of parent branch
+        deltaG (double) - free energy of root branch
+        """
 
-        # microstate energies
-        cdef double boltzmann
-        cdef double exponential
+        # get node index shifts (* note degeneracy is shifted 1 place)
+        cdef int shift = site * self.Nc
+        cdef int cshift = shift + self.Nc
+        self.shift = shift
+        self.cshift = cshift
 
-        # degeneracy
-        cdef double C
-        cdef double degeneracy
+        # initialize the weights for current branch
+        self.initialize_weights()
 
-        # partition values
-        cdef double weight
-        cdef double z
-        cdef double occupancy
+        # get free energy and update degeneracies
+        deltaG = self.get_free_energy(site, state, neighbor_state, deltaG)
+        self.update_degeneracy(state)
 
-        # indices (note degeneracy is shifted 1 place)
-        cdef int row = site * self.Nc
-        cdef int crow = row + self.Nc
+        # update all branches (run recursion)
+        self.update_branches(site, state, deltaG, shift, cshift)
 
-        # initialize the weights for current site as zero
-        for c_index in xrange(self.Nc):
-            self.weights.data.as_doubles[row+c_index] = 0
+        # update partition for current node
+        self.update_partition(site, state, deltaG, shift, cshift)
 
-        # evaluate binding strength of current microstate
+    @cython.boundscheck(False)
+    @cython.wraparound(False)
+    cdef void initialize_weights(self) nogil:
+        """
+        Initialize boltzmann weights for current branch.
+        """
+        cdef int i
+        for i in xrange(self.Nc):
+            self.weights.data.as_doubles[self.shift+i] = 0
+
+    @cython.boundscheck(False)
+    @cython.wraparound(False)
+    cdef double get_free_energy(self,
+                    int site,
+                    int state,
+                    int neighbor_state,
+                    double deltaG) nogil:
+        """ Get microstate free energy. """
         if state != 0:
-
-            # update microstate free energy
             deltaG += self.element.get_binding_energy(site, state)
             if state == neighbor_state:
                 deltaG += self.element.gamma.data.as_doubles[state-1]
+        return deltaG
 
-            # increment degeneracy
-            index = (state-1)*self.Nc
-            for c_index in xrange(self.Nc):
-                C = self.C.data.as_doubles[index+c_index]
-                degeneracy = self.degeneracy.data.as_doubles[row+c_index] * C
-                self.degeneracy.data.as_doubles[crow+c_index] = degeneracy
+    @cython.boundscheck(False)
+    @cython.wraparound(False)
+    cdef void update_degeneracy(self, int state) nogil:
+        """
+        Update degeneracies for current site and pass to children.
 
+        Args:
+        site (long) - index of current binding site
+        state (long) - index of current branch
+        """
+
+        cdef int i
+        cdef double C, d
+        cdef int bshift
+
+        # if site is occupied, increment degeneracies and pass to children
+        if state != 0:
+            bshift = (state-1)*self.Nc
+            for i in xrange(self.Nc):
+                C = self.C.data.as_doubles[bshift+i]
+                d = self.degeneracy.data.as_doubles[self.shift+i] * C
+                self.degeneracy.data.as_doubles[self.cshift+i] = d
+
+        # if site is unoccupied, pass existing degeneracies to children
         else:
-            # copy degeneracy
-            for c_index in xrange(self.Nc):
-                degeneracy = self.degeneracy.data.as_doubles[row+c_index]
-                self.degeneracy.data.as_doubles[crow+c_index] = degeneracy
+            for i in xrange(self.Nc):
+                self.degeneracy.data.as_doubles[self.cshift+i] = self.degeneracy.data.as_doubles[self.shift+i]
 
-        # recursion (traverse child microstates)
-        if site < (self.Ns - 1):
+    @cython.boundscheck(False)
+    @cython.wraparound(False)
+    cdef void update_branches(self,
+                    int site,
+                    int state,
+                    double deltaG,
+                    int shift,
+                    int cshift):
+        """
+        Update subsequent branches.
 
-            for new_state in xrange(self.b):
+        Args:
+        site (long) - index of current binding site
+        state (long) - index of current branch
+        deltaG (double) - free energy of root branch
+        shift (long) -
+        cshift (long) -
+        """
 
-                # evaluate children's weights
-                self.walk(site+1, new_state, state, deltaG)
+        cdef int i, new_state
+        cdef double weight
 
-                # add children's weights to parents
-                for c_index in xrange(self.Nc):
-                    weight = self.weights.data.as_doubles[row+c_index] + self.weights.data.as_doubles[crow+c_index]
-                    self.weights.data.as_doubles[row+c_index] = weight
+        # if tree has not reached target depth, update all branches
+        if site < (self.element.Ns - 1):
 
-        # if site is unoccupied, don't make an assignment but continue
+            # update each branch
+            for new_state in xrange(self.element.b):
+                self.update_branch(site+1, new_state, state, deltaG)
+
+                # add branch's weights to current node
+                for i in xrange(self.Nc):
+                    weight = self.weights.data.as_doubles[shift+i] + self.weights.data.as_doubles[cshift+i]
+                    self.weights.data.as_doubles[shift+i] = weight
+
+    @cython.boundscheck(False)
+    @cython.wraparound(False)
+    cdef void update_partition(self,
+                    int site,
+                    int state,
+                    double deltaG,
+                    int shift,
+                    int cshift) nogil:
+        """
+        Update subsequent branches.
+
+        Args:
+        site (long) - index of current binding site
+        state (long) - index of current branch
+        deltaG (double) - free energy of root branch
+        shift (long) -
+        cshift (long) -
+        """
+
+        cdef int i, index
+        cdef int oshift
+        cdef double exponential, boltzmann
+        cdef double degeneracy, weight, occupancy, z
+
+        # if site is unoccupied, don't make any assignments
         if state != 0:
 
             # evaluate partition weight
             exponential = exp(deltaG)
 
-            for c_index in xrange(self.Nc):
+            # get shift index for occupancy array
+            oshift = (site*self.element.n*self.Nc) + ((state-1)*self.Nc)
+
+            # update weights, occupancies, and partitions for each unique conc.
+            for i in xrange(self.Nc):
 
                 # compute boltzmann factor
-                degeneracy = self.degeneracy.data.as_doubles[crow+c_index]
+                degeneracy = self.degeneracy.data.as_doubles[cshift+i]
                 boltzmann = exponential * degeneracy
 
                 # update weights
-                weight = self.weights.data.as_doubles[row+c_index] + boltzmann
-                self.weights.data.as_doubles[row+c_index] = weight
+                index = shift+i
+                weight = self.weights.data.as_doubles[index] + boltzmann
+                self.weights.data.as_doubles[index] = weight
 
                 # assign weights to current site/occupant pair
-                index = site*self.n*self.Nc + (state-1)*self.Nc + c_index
+                index = oshift + i
                 occupancy = self.occupancies.data.as_doubles[index]
                 self.occupancies.data.as_doubles[index] = occupancy + weight
 
                 # update partition function
-                z = self.Z.data.as_doubles[c_index] + boltzmann
-                self.Z.data.as_doubles[c_index] = z
+                z = self.Z.data.as_doubles[i] + boltzmann
+                self.Z.data.as_doubles[i] = z
 
 
-cdef class cSubTree(cTree):
+cdef class cBranch(cTree):
+    """
+    Defines a ternary tree that may only be traversed sequentially.
+
+    Addtl. attributes:
+    root_id (long) - node depth before parallel branching
+    branch_id (long) - index of branch
+    """
 
     # methods
     def __init__(self,
                  cTree tree,
                  int cut_point,
-                 int branch):
-        cdef int c_index
-        cdef int index = (branch-1)*self.Nc
-        cdef int row = cut_point * tree.Nc
-        cdef double degeneracy
+                 int branch_id):
+        """
+        Args:
+        tree (cTree) - parent tree from which branch is initiated
+        cut_point (long) - node depth before parallel branching
+        branch_id (long) - index of branch (not used)
+        """
+
         cdef cElement element = tree.element.truncate(cut_point)
         cTree.__init__(self, element, tree.Nc, tree.C, element.Ns)
-
-        # copy parent degeneracy to bottom level and initialize Z
-        for c_index in xrange(self.Nc):
-            degeneracy = tree.degeneracy.data.as_doubles[row+c_index]
-            self.degeneracy.data.as_doubles[c_index] = degeneracy
-            self.Z.data.as_doubles[c_index] = 0.
+        self.branch_id = branch_id
+        self.root_id = cut_point
+        self.initialize_branch(tree)
 
     @cython.boundscheck(False)
     @cython.wraparound(False)
-    cdef void walk(self,
-                   int site,
-                   int state,
-                   int neighbor_state,
-                   double deltaG) with gil:
-        """ Visit all children (cannot branch). """
-        self.step(site, state, neighbor_state, deltaG)
+    cdef void initialize_branch(self, cTree tree) nogil:
+        """
+        Initialize current branch.
+
+        Args:
+        tree (cTree) - parent tree from which branch is initiated
+        """
+        cdef int i
+        cdef double degeneracy
+        cdef int shift = self.root_id * tree.Nc
+
+        for i in xrange(self.Nc):
+
+            # copy root node degeneracy to top level of current branch
+            degeneracy = tree.degeneracy.data.as_doubles[shift+i]
+            self.degeneracy.data.as_doubles[i] = degeneracy
+
+            # initialize partitions as zero
+            self.Z.data.as_doubles[i] = 0.
 
     @cython.boundscheck(False)
     @cython.wraparound(False)
-    cdef void step(self,
+    cdef void update_node_nogil(self,
                     int site,
                     int state,
                     int neighbor_state,
-                    double deltaG) with gil:
-        """ Visit child. """
+                    double deltaG) nogil:
+        """
+        Update current node.
 
-        # indices
-        cdef int index
-        cdef int c_index
-        cdef int new_state
+        Args:
+        site (long) - index of current node
+        state (long) - index of current branch
+        neighbor_state (long) - index of parent branch
+        deltaG (double) - free energy of root branch
+        """
 
-        # microstate energies
-        cdef double boltzmann
-        cdef double exponential
+        # get node index shifts (* note degeneracy is shifted 1 place)
+        cdef int shift = site * self.Nc
+        cdef int cshift = shift + self.Nc
+        self.shift = shift
+        self.cshift = cshift
 
-        # degeneracy
-        cdef double C
-        cdef double degeneracy
+        # initialize the weights for current branch
+        self.initialize_weights()
 
-        # partition values
-        cdef double weight
-        cdef double z
-        cdef double occupancy
+        # get free energy and update degeneracies
+        deltaG = self.get_free_energy(site, state, neighbor_state, deltaG)
+        self.update_degeneracy(state)
 
-        # indices (note degeneracy is shifted 1 place)
-        cdef int row = site * self.Nc
-        cdef int crow = row + self.Nc
+        # update all branches (run recursion)
+        self.update_branches_nogil(site, state, deltaG, shift, cshift)
 
-        # initialize the weights for current site as zero
-        for c_index in xrange(self.Nc):
-            self.weights.data.as_doubles[row+c_index] = 0
+        # update partition for current node
+        self.update_partition(site, state, deltaG, shift, cshift)
 
-        # evaluate binding strength of current microstate
-        if state != 0:
+    @cython.boundscheck(False)
+    @cython.wraparound(False)
+    cdef void update_branches_nogil(self,
+                    int site,
+                    int state,
+                    double deltaG,
+                    int shift,
+                    int cshift) nogil:
+        """
+        Update subsequent branches.
 
-            # update microstate free energy
-            deltaG += self.element.get_binding_energy(site, state)
-            if state == neighbor_state:
-                deltaG += self.element.gamma.data.as_doubles[state-1]
+        Args:
+        site (long) - index of current binding site
+        state (long) - index of current branch
+        deltaG (double) - free energy of root branch
+        shift (long) -
+        cshift (long) -
+        """
 
-            # update degeneracy
-            index = (state-1)*self.Nc
-            for c_index in xrange(self.Nc):
-                C = self.C.data.as_doubles[index+c_index]
-                degeneracy = self.degeneracy.data.as_doubles[row+c_index] * C
-                self.degeneracy.data.as_doubles[crow+c_index] = degeneracy
+        cdef int i, new_state
 
-        else:
-            # copy degeneracy
-            for c_index in xrange(self.Nc):
-                degeneracy = self.degeneracy.data.as_doubles[row+c_index]
-                self.degeneracy.data.as_doubles[crow+c_index] = degeneracy
+        # if tree has not reached target depth, update all branches
+        if site < (self.element.Ns - 1):
 
-        # recursion (traverse child microstates)
-        if site < (self.Ns - 1):
+            # update each branch
+            for new_state in xrange(self.element.b):
+                self.update_node_nogil(site+1, new_state, state, deltaG)
 
-            for new_state in xrange(self.b):
-
-                # evaluate children's weights
-                self.walk(site+1, new_state, state, deltaG)
-
-                # add children's weights to parents
-                for c_index in xrange(self.Nc):
-                    weight = self.weights.data.as_doubles[row+c_index] + self.weights.data.as_doubles[crow+c_index]
-                    self.weights.data.as_doubles[row+c_index] = weight
-
-        # if site is unoccupied, don't make an assignment but continue
-        if state != 0:
-
-            # evaluate partition weight
-            exponential = exp(deltaG)
-
-            for c_index in xrange(self.Nc):
-
-                # compute boltzmann factor
-                degeneracy = self.degeneracy.data.as_doubles[crow+c_index]
-                boltzmann = exponential * degeneracy
-
-                # update weights
-                weight = self.weights.data.as_doubles[row+c_index] + boltzmann
-                self.weights.data.as_doubles[row+c_index] = weight
-
-                # assign weights to current site/occupant pair
-                index = site*self.n*self.Nc + (state-1)*self.Nc + c_index
-                occupancy = self.occupancies.data.as_doubles[index]
-                self.occupancies.data.as_doubles[index] = occupancy + weight
-
-                # update partition function
-                z = self.Z.data.as_doubles[c_index] + boltzmann
-                self.Z.data.as_doubles[c_index] = z
-
-
-
-
-
-
+                # add branch's weights to current node
+                for i in xrange(self.Nc):
+                    weight = self.weights.data.as_doubles[shift+i] + self.weights.data.as_doubles[cshift+i]
+                    self.weights.data.as_doubles[shift+i] = weight

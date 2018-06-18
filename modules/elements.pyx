@@ -234,6 +234,7 @@ class Element:
         # set system size
         self.Ns = Ns
         self.b = N_species + 1
+        self.n = N_species
         self.Nm = self.b**Ns
         self.params = params
 

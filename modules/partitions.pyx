@@ -153,15 +153,15 @@ cdef class cParallelPF(cTree):
     @cython.wraparound(False)
     cdef void normalize(self) with gil:
         """ Normalize occupancies by partition function value. """
-        cdef int i, c_index
+        cdef int i, j
         cdef double occupancy, Z
-        cdef int row
-        for i in xrange(self.Ns*self.n):
-            row = i*self.Nc
-            for c_index in xrange(self.Nc):
-                Z = self.Z.data.as_doubles[c_index]
-                occupancy = self.occupancies.data.as_doubles[row+c_index] / Z
-                self.occupancies.data.as_doubles[row+c_index] = occupancy
+        cdef int shift
+        for i in xrange(self.element.Ns*self.element.n):
+            shift = i*self.Nc
+            for j in xrange(self.Nc):
+                Z = self.Z.data.as_doubles[j]
+                occupancy = self.occupancies.data.as_doubles[shift+j] / Z
+                self.occupancies.data.as_doubles[shift+j] = occupancy
 
 
 class PartitionFunction:
@@ -170,9 +170,6 @@ class PartitionFunction:
     def __init__(self, element, concentrations):
 
         # get system dimensions
-        self.Ns = element.Ns
-        self.b = element.b
-        self.n = element.b - 1
         self.element = element
         self.concentrations = concentrations
         self.Nc = concentrations.shape[0]
@@ -184,12 +181,12 @@ class PartitionFunction:
         c_pf = cParallelPF(self.element, self.concentrations, cut)
 
         # convert array to ndarray
-        shape = (self.Ns, self.n, self.Nc)
+        shape = (self.element.Ns, self.element.n, self.Nc)
         c_occupancies = c_pf.get_occupancies()
         occupancies = np.array(c_occupancies, dtype=np.float64).reshape(*shape)
 
         # append balance
-        balance = (1 - occupancies.sum(axis=1)).reshape(self.Ns, 1, self.Nc)
+        balance = (1 - occupancies.sum(axis=1)).reshape(self.element.Ns, 1, self.Nc)
         occupancies = np.append(balance, occupancies, axis=1)
 
         return occupancies
@@ -204,12 +201,12 @@ class PartitionFunction:
             c_pf = cPF(self.element, self.concentrations)
 
         # convert array to ndarray
-        shape = (self.n, self.Ns)
+        shape = (self.element.n, self.element.Ns)
         c_occupancies = c_pf.get_occupancies()
         occupancies = np.array(c_occupancies, dtype=np.float64).reshape(*shape)
 
         # append balance
-        balance = (1 - occupancies.sum(axis=0)).reshape(1, self.Ns)
+        balance = (1 - occupancies.sum(axis=0)).reshape(1, self.element.Ns)
         occupancies = np.append(balance, occupancies, axis=0)
 
         return occupancies
