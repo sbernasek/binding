@@ -26,8 +26,6 @@ cdef class cTree:
     degeneracy (array) - degeneracy terms, flattened (Ns+1) x Nc
     occupancies (array) - binding site occupancies, flattened Ns x N x Nc
     Z (array) - partition function values, 1 x Nc array
-    shift (long) - index for current node
-    cshift (long) - index for subsequent node
 
     Notes:
     - degeneracy array is used for passing degeneracy terms down the tree
@@ -111,8 +109,10 @@ cdef class cTree:
         cdef double z
         cdef double occupancy
 
-        # instantiate and traverse branch
+        # instantiate branch
         cdef cBranch child = cBranch(self, site, state)
+
+        # traverse branch (GIL is released here)
         child.update_node_nogil(0, state, neighbor_state, deltaG)
 
         # inherit weights, occupancies, and partition function
@@ -150,15 +150,13 @@ cdef class cTree:
         # get node index shifts (* note degeneracy is shifted 1 place)
         cdef int shift = site * self.Nc
         cdef int cshift = shift + self.Nc
-        self.shift = shift
-        self.cshift = cshift
 
         # initialize the weights for current branch
-        self.initialize_weights()
+        self.initialize_weights(shift)
 
         # get free energy and update degeneracies
         deltaG = self.get_free_energy(site, state, neighbor_state, deltaG)
-        self.update_degeneracy(state)
+        self.update_degeneracy(state, shift, cshift)
 
         # update all branches (run recursion)
         self.update_branches(site, state, deltaG, shift, cshift)
@@ -168,13 +166,17 @@ cdef class cTree:
 
     @cython.boundscheck(False)
     @cython.wraparound(False)
-    cdef void initialize_weights(self) nogil:
+    cdef void initialize_weights(self,
+                                 int shift) nogil:
         """
         Initialize boltzmann weights for current branch.
+
+        Args:
+        shift (long) - index for current node
         """
         cdef int i
         for i in xrange(self.Nc):
-            self.weights.data.as_doubles[self.shift+i] = 0
+            self.weights.data.as_doubles[shift+i] = 0
 
     @cython.boundscheck(False)
     @cython.wraparound(False)
@@ -192,13 +194,17 @@ cdef class cTree:
 
     @cython.boundscheck(False)
     @cython.wraparound(False)
-    cdef void update_degeneracy(self, int state) nogil:
+    cdef void update_degeneracy(self,
+                                int state,
+                                int shift,
+                                int cshift) nogil:
         """
         Update degeneracies for current site and pass to children.
 
         Args:
-        site (long) - index of current binding site
         state (long) - index of current branch
+        shift (long) - index for current node
+        cshift (long) - index for subsequent node
         """
 
         cdef int i
@@ -210,13 +216,13 @@ cdef class cTree:
             bshift = (state-1)*self.Nc
             for i in xrange(self.Nc):
                 C = self.C.data.as_doubles[bshift+i]
-                d = self.degeneracy.data.as_doubles[self.shift+i] * C
-                self.degeneracy.data.as_doubles[self.cshift+i] = d
+                d = self.degeneracy.data.as_doubles[shift+i] * C
+                self.degeneracy.data.as_doubles[cshift+i] = d
 
         # if site is unoccupied, pass existing degeneracies to children
         else:
             for i in xrange(self.Nc):
-                self.degeneracy.data.as_doubles[self.cshift+i] = self.degeneracy.data.as_doubles[self.shift+i]
+                self.degeneracy.data.as_doubles[cshift+i] = self.degeneracy.data.as_doubles[shift+i]
 
     @cython.boundscheck(False)
     @cython.wraparound(False)
@@ -233,8 +239,8 @@ cdef class cTree:
         site (long) - index of current binding site
         state (long) - index of current branch
         deltaG (double) - free energy of root branch
-        shift (long) -
-        cshift (long) -
+        shift (long) - index for current node
+        cshift (long) - index for subsequent node
         """
 
         cdef int i, new_state
@@ -267,8 +273,8 @@ cdef class cTree:
         site (long) - index of current binding site
         state (long) - index of current branch
         deltaG (double) - free energy of root branch
-        shift (long) -
-        cshift (long) -
+        shift (long) - index for current node
+        cshift (long) - index for subsequent node
         """
 
         cdef int i, index
@@ -336,7 +342,8 @@ cdef class cBranch(cTree):
 
     @cython.boundscheck(False)
     @cython.wraparound(False)
-    cdef void initialize_branch(self, cTree tree) nogil:
+    cdef void initialize_branch(self,
+                                cTree tree) nogil:
         """
         Initialize current branch.
 
@@ -376,15 +383,13 @@ cdef class cBranch(cTree):
         # get node index shifts (* note degeneracy is shifted 1 place)
         cdef int shift = site * self.Nc
         cdef int cshift = shift + self.Nc
-        self.shift = shift
-        self.cshift = cshift
 
         # initialize the weights for current branch
-        self.initialize_weights()
+        self.initialize_weights(shift)
 
         # get free energy and update degeneracies
         deltaG = self.get_free_energy(site, state, neighbor_state, deltaG)
-        self.update_degeneracy(state)
+        self.update_degeneracy(state, shift, cshift)
 
         # update all branches (run recursion)
         self.update_branches_nogil(site, state, deltaG, shift, cshift)

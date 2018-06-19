@@ -30,8 +30,10 @@ class HillModel:
 
     def fit(self, p0=None, bounds=None, method='SLSQP', tol=1e-10, **kwargs):
         if p0 is None:
-            p0 = np.array([1, 1, 10, 10])
-            bounds = [(1, 100), (1, 100), (0.01, 1000), (0.01, 1000)]
+            p0 = np.array([1, 1, 1, 1])
+        if bounds is None:
+            bounds = [(0.1, 25), (0.1, 25), (0.01, 1000), (0.01, 1000)]
+        print(bounds)
         result = minimize(self.objective, p0, method=method, bounds=bounds, tol=tol, **kwargs)
 
         # raise error if fit fails

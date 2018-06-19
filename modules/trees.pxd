@@ -24,8 +24,6 @@ cdef class cTree:
     cdef array degeneracy
     cdef array occupancies
     cdef array Z
-    cdef int shift
-    cdef int cshift
 
     # methods
     cdef void initialize(self)
@@ -50,7 +48,8 @@ cdef class cTree:
                     int neighbor_state,
                     double deltaG)
 
-    cdef void initialize_weights(self) nogil
+    cdef void initialize_weights(self,
+                    int shift) nogil
 
     cdef double get_free_energy(self,
                     int site,
@@ -59,7 +58,9 @@ cdef class cTree:
                     double deltaG) nogil
 
     cdef void update_degeneracy(self,
-                    int state) nogil
+                    int state,
+                    int shift,
+                    int cshift) nogil
 
     cdef void update_branches(self,
                     int site,
