@@ -30,18 +30,6 @@ cdef class cTree:
 
     cdef void traverse(self)
 
-    cdef void update_branch(self,
-                   int site,
-                   int state,
-                   int neighbor_state,
-                   double deltaG)
-
-    cdef void create_subtree(self,
-                    int site,
-                    int state,
-                    int neighbor_state,
-                    double deltaG)
-
     cdef void update_node(self,
                     int site,
                     int state,
@@ -62,12 +50,23 @@ cdef class cTree:
                     int shift,
                     int cshift) nogil
 
+    cdef void get_branch_weights(self,
+                                int shift,
+                                int cshift) nogil
+
     cdef void update_branches(self,
                     int site,
                     int state,
                     double deltaG,
                     int shift,
                     int cshift)
+
+    cdef void update_branch(self,
+                    cBranch child,
+                    int site,
+                    int state,
+                    int neighbor_state,
+                    double deltaG) nogil
 
     cdef void update_partition(self,
                     int site,

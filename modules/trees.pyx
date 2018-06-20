@@ -3,6 +3,10 @@
 # cython: profile=False
 
 import cython
+
+from cython.parallel import prange
+from copy import deepcopy
+
 import numpy as np
 cimport numpy as np
 from array import array
@@ -11,6 +15,8 @@ from libc.math cimport exp
 
 # import microstates
 from elements cimport cElement
+
+from time import time
 
 
 cdef class cTree:
@@ -77,58 +83,7 @@ cdef class cTree:
         """ Traverse all nodes. """
         cdef int state
         for state in xrange(self.element.b):
-            self.update_branch(0, state, 0, 0.)
-
-    @cython.boundscheck(False)
-    @cython.wraparound(False)
-    cdef void update_branch(self,
-                   int site,
-                   int state,
-                   int neighbor_state,
-                   double deltaG):
-        """ Update branch of tree. """
-
-        # instantiate and traverse branch
-        if site > self.cut_point:
-            self.create_subtree(site, state, neighbor_state, deltaG)
-        else:
-            self.update_node(site, state, neighbor_state, deltaG)
-
-    @cython.boundscheck(False)
-    @cython.wraparound(False)
-    cdef void create_subtree(self,
-                    int site,
-                    int state,
-                    int neighbor_state,
-                    double deltaG):
-        """ Instantiate and traverse independent branch. """
-
-        cdef int i
-        cdef int zshift = site * self.Nc
-        cdef int oshift = site * self.element.n * self.Nc
-        cdef double z
-        cdef double occupancy
-
-        # instantiate branch
-        cdef cBranch child = cBranch(self, site, state)
-
-        # traverse branch (GIL is released here)
-        child.update_node_nogil(0, state, neighbor_state, deltaG)
-
-        # inherit weights, occupancies, and partition function
-        for i in xrange(self.Nc):
-
-            # inherit weights (copy top level)
-            self.weights.data.as_doubles[zshift+i] = child.weights.data.as_doubles[i]
-
-            # increment partition function (add total)
-            z = self.Z.data.as_doubles[i] + child.Z.data.as_doubles[i]
-            self.Z.data.as_doubles[i] = z
-
-        # update occupancies
-        for i in xrange(child.element.Ns*self.element.n*self.Nc):
-            occupancy = self.occupancies.data.as_doubles[oshift+i] + child.occupancies.data.as_doubles[i]
-            self.occupancies.data.as_doubles[oshift+i] = occupancy
+            self.update_node(0, state, 0, 0.)
 
     @cython.boundscheck(False)
     @cython.wraparound(False)
@@ -226,6 +181,18 @@ cdef class cTree:
 
     @cython.boundscheck(False)
     @cython.wraparound(False)
+    cdef void get_branch_weights(self,
+                                int shift,
+                                int cshift) nogil:
+        """ Add branch weights to current node. """
+        cdef int i
+        cdef double weight
+        for i in xrange(self.Nc):
+            weight = self.weights.data.as_doubles[shift+i] + self.weights.data.as_doubles[cshift+i]
+            self.weights.data.as_doubles[shift+i] = weight
+
+    @cython.boundscheck(False)
+    @cython.wraparound(False)
     cdef void update_branches(self,
                     int site,
                     int state,
@@ -243,20 +210,154 @@ cdef class cTree:
         cshift (long) - index for subsequent node
         """
 
-        cdef int i, new_state
+        cdef int i, new_state, new_site
         cdef double weight
+        cdef cBranch branch
+        cdef dict branches
+
+        cdef double start
 
         # if tree has not reached target depth, update all branches
         if site < (self.element.Ns - 1):
+            new_site = site+1
 
-            # update each branch
-            for new_state in xrange(self.element.b):
-                self.update_branch(site+1, new_state, state, deltaG)
+            # if new site is after cut point, create parallel branches
+            if new_site > self.cut_point:
 
-                # add branch's weights to current node
-                for i in xrange(self.Nc):
-                    weight = self.weights.data.as_doubles[shift+i] + self.weights.data.as_doubles[cshift+i]
-                    self.weights.data.as_doubles[shift+i] = weight
+                start = time()
+
+                branches = {}
+                for new_state in range(self.element.b):
+                    branches[new_state] = cBranch(self, new_site, new_state)
+
+                # create parallel branches
+                for new_state in prange(self.element.b,
+                                        schedule='static',
+                                        nogil=True,
+                                        num_threads=2):
+
+                    # create independent branch
+                    with gil:
+                        branch = branches[new_state]
+                        #print('Branch: {:d}, start: {:0.2f}'.format(new_state, time()-start))
+
+                    # traverse branch
+                    self.update_branch(branch, new_site, new_state, state, deltaG)
+
+                    #with gil:
+                        #print('Branch: {:d}, stop: {:0.2f}'.format(new_state, time()-start))
+
+                    # add branch's weights to current node
+                    self.get_branch_weights(shift, cshift)
+
+            else:
+                for new_state in range(self.element.b):
+                    self.update_node(new_site, new_state, state, deltaG)
+                    self.get_branch_weights(shift, cshift)
+
+    # @cython.boundscheck(False)
+    # @cython.wraparound(False)
+    # cdef void update_branches(self,
+    #                 int site,
+    #                 int state,
+    #                 double deltaG,
+    #                 int shift,
+    #                 int cshift):
+    #     """
+    #     Update subsequent branches.
+
+    #     Args:
+    #     site (long) - index of current binding site
+    #     state (long) - index of current branch
+    #     deltaG (double) - free energy of root branch
+    #     shift (long) - index for current node
+    #     cshift (long) - index for subsequent node
+    #     """
+
+    #     cdef int i, new_state, new_site
+    #     cdef double weight
+    #     cdef cBranch branch
+
+    #     cdef double start
+
+    #     cdef double deltaG_threadsafe
+
+    #     cdef dict children = {}
+
+    #     # if tree has not reached target depth, update all branches
+    #     if site < (self.element.Ns - 1):
+    #         new_site = site+1
+
+    #         # if new site is after cut point, create parallel branches
+    #         if new_site > self.cut_point:
+
+    #             start = time()
+
+    #             # create parallel branches
+    #             for new_state in prange(self.element.b,
+    #                                     schedule='static',
+    #                                     nogil=True,
+    #                                     num_threads=self.element.b):
+
+    #                 # create independent branch
+    #                 with gil:
+    #                     branch = cBranch(self, new_site, new_state)
+    #                     print('\nBranch: {:d}, start: {:0.2f}'.format( new_state, time()-start))
+
+    #                     # traverse branch
+    #                     branch.update_node_nogil(0, new_state, state, deltaG)
+
+    #                 with gil:
+    #                     print('\nBranch: {:d}, stop: {:0.2f}'.format( new_state, time()-start))
+    #                     children[new_state] = branch
+
+
+    #             # store results
+
+    #             # add branch's weights to current node
+    #             #self.get_branch_weights(shift, cshift)
+
+    #         else:
+    #             for new_state in range(self.element.b):
+    #                 self.update_node(new_site, new_state, state, deltaG)
+    #                 self.get_branch_weights(shift, cshift)
+
+
+    @cython.boundscheck(False)
+    @cython.wraparound(False)
+    cdef void update_branch(self,
+                    cBranch child,
+                    int site,
+                    int state,
+                    int neighbor_state,
+                    double deltaG) nogil:
+        """ Instantiate and traverse independent branch. """
+
+        cdef int i
+        cdef int zshift = site * self.Nc
+        cdef int oshift = site * self.element.n * self.Nc
+        cdef double z, occupancy
+
+        # instantiate branch
+        #cdef cBranch child = cBranch(self, site, state)
+
+        # traverse branch (GIL is released here)
+        child.update_node_nogil(0, state, neighbor_state, deltaG)
+
+        # inherit weights, occupancies, and partition function
+        for i in xrange(self.Nc):
+
+            # inherit weights (copy top level)
+            self.weights.data.as_doubles[zshift+i] = child.weights.data.as_doubles[i]
+
+            # increment partition function (add total)
+            z = self.Z.data.as_doubles[i] + child.Z.data.as_doubles[i]
+            self.Z.data.as_doubles[i] = z
+
+        # update occupancies
+        for i in xrange(child.element.Ns*self.element.n*self.Nc):
+            occupancy = self.occupancies.data.as_doubles[oshift+i] + child.occupancies.data.as_doubles[i]
+            self.occupancies.data.as_doubles[oshift+i] = occupancy
 
     @cython.boundscheck(False)
     @cython.wraparound(False)
@@ -360,6 +461,8 @@ cdef class cBranch(cTree):
             degeneracy = tree.degeneracy.data.as_doubles[shift+i]
             self.degeneracy.data.as_doubles[i] = degeneracy
 
+            #self.degeneracy[i] = tree.degeneracy[shift+i]
+
             # initialize partitions as zero
             self.Z.data.as_doubles[i] = 0.
 
@@ -420,12 +523,6 @@ cdef class cBranch(cTree):
 
         # if tree has not reached target depth, update all branches
         if site < (self.element.Ns - 1):
-
-            # update each branch
             for new_state in xrange(self.element.b):
                 self.update_node_nogil(site+1, new_state, state, deltaG)
-
-                # add branch's weights to current node
-                for i in xrange(self.Nc):
-                    weight = self.weights.data.as_doubles[shift+i] + self.weights.data.as_doubles[cshift+i]
-                    self.weights.data.as_doubles[shift+i] = weight
+                self.get_branch_weights(shift, cshift)

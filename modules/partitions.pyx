@@ -136,7 +136,7 @@ cdef class cParallelPF(cTree):
         # set cut point for parallelization (splits branches after cut_point)
         cdef int cut_point
         if cut is None:
-            cut_point = -1
+            cut_point = 0
         else:
             cut_point = cut
 

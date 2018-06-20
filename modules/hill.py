@@ -33,7 +33,6 @@ class HillModel:
             p0 = np.array([1, 1, 1, 1])
         if bounds is None:
             bounds = [(0.1, 25), (0.1, 25), (0.01, 1000), (0.01, 1000)]
-        print(bounds)
         result = minimize(self.objective, p0, method=method, bounds=bounds, tol=tol, **kwargs)
 
         # raise error if fit fails
