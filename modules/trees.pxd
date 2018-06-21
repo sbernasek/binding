@@ -2,14 +2,7 @@
 # cython: wraparound=False
 # cython: profile=False
 
-import cython
-import numpy as np
-cimport numpy as np
-from array import array
-from cpython.array cimport array, clone
-from libc.math cimport exp
-
-# import microstates
+# import binding element
 from elements cimport cElement
 
 
@@ -17,84 +10,61 @@ cdef class cTree:
 
     # attributes
     cdef cElement element
-    cdef int cut_point
+    cdef int max_depth
+    cdef int root
+    cdef int branch
+    cdef double root_deltaG
     cdef int Nc
-    cdef array C
-    cdef array weights
-    cdef array degeneracy
-    cdef array occupancies
-    cdef array Z
+
+    cdef double *C
+    cdef double *weights
+    cdef double *degeneracy
+    cdef double *occupancies
+    cdef double *Z
 
     # methods
     cdef void initialize(self)
 
-    cdef void traverse(self)
-
-    cdef void update_node(self,
-                    int site,
-                    int state,
-                    int neighbor_state,
-                    double deltaG)
+    cdef void set_root(self,
+                       double deltaG,
+                       double[:] degeneracy) nogil
 
     cdef void initialize_weights(self,
                     int shift) nogil
 
-    cdef double get_free_energy(self,
-                    int site,
-                    int state,
-                    int neighbor_state,
+    cdef void traverse(self) nogil
+
+    cdef void update_node(self,
+                    int depth,
+                    int branch,
+                    int parent_branch,
+                    double deltaG) nogil
+
+    cdef void update_branches(self,
+                    int depth,
+                    int parent_branch,
+                    double deltaG,
+                    int shift,
+                    int cshift) nogil
+
+    cdef double update_free_energy(self,
+                    int depth,
+                    int branch,
+                    int parent_branch,
                     double deltaG) nogil
 
     cdef void update_degeneracy(self,
-                    int state,
+                    int branch,
                     int shift,
                     int cshift) nogil
 
-    cdef void get_branch_weights(self,
-                                int shift,
-                                int cshift) nogil
-
-    cdef void update_branches(self,
-                    int site,
-                    int state,
-                    double deltaG,
+    cdef void inherit_branch_weights(self,
                     int shift,
-                    int cshift)
-
-    cdef void update_branch(self,
-                    cBranch child,
-                    int site,
-                    int state,
-                    int neighbor_state,
-                    double deltaG) nogil
+                    int cshift) nogil
 
     cdef void update_partition(self,
-                    int site,
-                    int state,
-                    double deltaG,
-                    int shift,
-                    int cshift) nogil
-
-
-cdef class cBranch(cTree):
-
-    # attributes
-    cdef int root_id
-    cdef int branch_id
-
-    # methods
-    cdef void initialize_branch(self,
-                    cTree tree) nogil
-
-    cdef void update_node_nogil(self,
-                    int site,
-                    int state,
-                    int neighbor_state,
-                    double deltaG) nogil
-
-    cdef void update_branches_nogil(self,
-                    int site,
-                    int state,
+                    int depth,
+                    int branch,
                     double deltaG,
                     int shift,
                     int cshift) nogil

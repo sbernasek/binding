@@ -8,22 +8,26 @@ import os
 args = ['-fopenmp']
 
 ext_modules = [
-    Extension("elements",["elements.pyx"], include_dirs=['.']),
+    Extension("elements",
+            ["elements.pyx"],
+            include_dirs=['.']),
 
-    Extension("trees",["trees.pyx"],
-                include_dirs=['.'],
-                extra_compile_args=args,
-                extra_link_args=args),
+    Extension("trees",
+            ["trees.pyx"],
+            include_dirs=['.'],
+            extra_compile_args=args,
+            extra_link_args=args),
 
-    Extension("partitions",["partitions.pyx"],
-                include_dirs=['.'],
-                extra_compile_args=args,
-                extra_link_args=args),
+    Extension("partitions",
+            ["partitions.pyx"],
+            include_dirs=['.'],
+            extra_compile_args=args,
+            extra_link_args=args),
 
-    Extension("ptest", ["ptest.pyx"],
-                include_dirs=['.'],
-                extra_compile_args=args,
-                extra_link_args=args)
+    # Extension("ptest", ["ptest.pyx"],
+    #             include_dirs=['.'],
+    #             extra_compile_args=args,
+    #             extra_link_args=args)
     ]
 
 setup(

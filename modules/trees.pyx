@@ -3,121 +3,147 @@
 # cython: profile=False
 
 import cython
-
 from cython.parallel import prange
-from copy import deepcopy
 
-import numpy as np
-cimport numpy as np
-from array import array
 from cpython.array cimport array, clone
 from libc.math cimport exp
-
-# import microstates
 from elements cimport cElement
 
-from time import time
+from cpython.mem cimport PyMem_Malloc, PyMem_Free
+
+
+
+
+
+
+
+
+
 
 
 cdef class cTree:
     """
-    Defines a ternary tree that is traversed sequentially until a pre-defined cut point at which parallel branching occurs.
+    Defines a ternary tree that is traversed sequentially.
 
     Attributes:
-    element (cElement instance) - binding site element
-    cut_point (long) - binding site before parallel branching
+    element (cElement instance) - binding site element of length Ns
     Nc (int) - number of unique protein concentration pairs
-    C (array) - protein concentrations, flattened 2 x Nc
-    weights (array) - boltzmann weights, flattened array
-    degeneracy (array) - degeneracy terms, flattened (Ns+1) x Nc
-    occupancies (array) - binding site occupancies, flattened Ns x N x Nc
-    Z (array) - partition function values, 1 x Nc array
+    C (double*) - protein concentrations, flattened N x Nc
+    weights (double*) - boltzmann weights, flattened array
+    degeneracy (double*) - degeneracy terms, flattened (Ns+1) x Nc
+    occupancies (double*) - binding site occupancies, flattened Ns x N x Nc
+    Z (double*) - partition function values, 1 x Nc array
 
     Notes:
-    - degeneracy array is used for passing degeneracy terms down the tree
-    - weights array is used for passing boltzmann weights up the tree
+    - all memory blocks are allocated upon instantiation
+    - degeneracy ptr is used for passing degeneracy terms down the tree
+    - weights ptr is used for passing boltzmann weights up the tree
     - weights/occupancies are not normalized during recursion
 
     """
 
-    def __init__(self,
+    def __cinit__(self,
                  cElement element,
                  int Nc,
                  array C,
-                 int cut_point):
+                 int root = 0,
+                 int branch = 0):
         """
         Args:
         element (cElement) - binding element instance
         Nc (long) - number of unique protein concentration pairs
         C (array) - protein concentrations, flattened 2 x Nc array
-        cut_point (long) - binding site before parallel branching
+        root (int) - root node for current branch
+        branch (int) - state of root's parent node
         """
 
         # set tree properties
-        self.element = element
-        self.cut_point = cut_point
+        self.element = element.truncate(root)
+        self.max_depth = self.element.Ns
 
         # set concentrations
         self.Nc = Nc
-        self.C = C
+        self.C = C.data.as_doubles
+
+        # set initial conditions
+        self.root = root
+        self.branch = branch
 
         # initialize occupancies as zero
         self.initialize()
 
+    def __dealloc__(self):
+        """ Deallocated memory blocks. """
+        PyMem_Free(self.degeneracy)
+        PyMem_Free(self.weights)
+        PyMem_Free(self.occupancies)
+        PyMem_Free(self.Z)
+
     cdef void initialize(self):
-        """ Initialize all arrays with zeros. """
+        """ Initialize all arrays (requires GIL for memory allocation) """
 
-        # truncate weights + degeneracy arrays to cut point
-        cdef int Ns = self.cut_point + 2
-        cdef np.ndarray w = np.zeros(Ns*self.Nc, dtype=np.float64)
-        cdef np.ndarray d = np.ones((Ns+1)*self.Nc, dtype=np.float64)
+        cdef int i
 
-        self.weights = array('d', w)
-        self.degeneracy = array('d', d)
-        self.occupancies = clone(array('d'), self.element.Ns*self.element.n*self.Nc, True)
-        self.Z = array('d', np.ones(self.Nc, dtype=np.float64))
+        # get dimensions
+        cdef int d_shape = (self.max_depth+1)*self.Nc
+        cdef int w_shape = self.max_depth*self.Nc
+        cdef int o_shape = self.max_depth*self.element.n*self.Nc
+        cdef int z_shape = self.Nc
+
+        # allocate memory for degeneracy
+        self.degeneracy = <double*> PyMem_Malloc(d_shape * sizeof(double))
+        for i in xrange(d_shape):
+            self.degeneracy[i] = 1
+        if not self.degeneracy:
+            raise MemoryError('Degeneracy memory block not allocated.')
+
+        # allocate memory for weights
+        self.weights = <double*> PyMem_Malloc(w_shape * sizeof(double))
+        for i in xrange(w_shape):
+            self.weights[i] = 0
+        if not self.weights:
+            raise MemoryError('Weights memory block not allocated.')
+
+        # allocate memory for occupancies
+        self.occupancies = <double*> PyMem_Malloc(o_shape * sizeof(double))
+        for i in xrange(o_shape):
+            self.occupancies[i] = 0
+        if not self.occupancies:
+            raise MemoryError('Occupancies memory block not allocated.')
+
+        # allocate memory for partition function
+        self.Z = <double*> PyMem_Malloc(z_shape * sizeof(double))
+        for i in xrange(z_shape):
+            self.Z[i] = 0
+        if not self.Z:
+            raise MemoryError('Z memory block not allocated.')
+
+        # allocate memory
+        # self.degeneracy = array('d', d_shape*[1]).data.as_doubles
+        # self.weights = clone(array('d'), w_shape, True).data.as_doubles
+        # self.occupancies = clone(array('d'), o_shape, True).data.as_doubles
+        # self.Z = array('d', z_shape*[1]).data.as_doubles
 
     @cython.boundscheck(False)
     @cython.wraparound(False)
-    cdef void traverse(self):
-        """ Traverse all nodes. """
-        cdef int state
-        for state in xrange(self.element.b):
-            self.update_node(0, state, 0, 0.)
-
-    @cython.boundscheck(False)
-    @cython.wraparound(False)
-    cdef void update_node(self,
-                    int site,
-                    int state,
-                    int neighbor_state,
-                    double deltaG):
+    cdef void set_root(self,
+                       double deltaG,
+                       double[:] degeneracy) nogil:
         """
-        Update current node.
+        Set root node properties.
 
         Args:
-        site (long) - index of current node
-        state (long) - index of current branch
-        neighbor_state (long) - index of parent branch
-        deltaG (double) - free energy of root branch
+        deltaG (double) - root node free energy
+        degeneracy (double[:]) - root node degeneracies
         """
+        cdef int i
 
-        # get node index shifts (* note degeneracy is shifted 1 place)
-        cdef int shift = site * self.Nc
-        cdef int cshift = shift + self.Nc
+        # set root delta G
+        self.root_deltaG = deltaG
 
-        # initialize the weights for current branch
-        self.initialize_weights(shift)
-
-        # get free energy and update degeneracies
-        deltaG = self.get_free_energy(site, state, neighbor_state, deltaG)
-        self.update_degeneracy(state, shift, cshift)
-
-        # update all branches (run recursion)
-        self.update_branches(site, state, deltaG, shift, cshift)
-
-        # update partition for current node
-        self.update_partition(site, state, deltaG, shift, cshift)
+        # copy root degeneracy to top level of degeneracy array
+        for i in xrange(self.Nc):
+            self.degeneracy[i] = degeneracy[i]
 
     @cython.boundscheck(False)
     @cython.wraparound(False)
@@ -131,239 +157,55 @@ cdef class cTree:
         """
         cdef int i
         for i in xrange(self.Nc):
-            self.weights.data.as_doubles[shift+i] = 0
+            self.weights[shift+i] = 0
 
     @cython.boundscheck(False)
     @cython.wraparound(False)
-    cdef double get_free_energy(self,
-                    int site,
-                    int state,
-                    int neighbor_state,
+    cdef void traverse(self) nogil:
+        """ Traverse all nodes. """
+        cdef int branch
+        for branch in xrange(self.element.b):
+            self.update_node(0, branch, 0, self.root_deltaG)
+
+    @cython.boundscheck(False)
+    @cython.wraparound(False)
+    cdef void update_node(self,
+                    int depth,
+                    int branch,
+                    int parent_branch,
                     double deltaG) nogil:
-        """ Get microstate free energy. """
-        if state != 0:
-            deltaG += self.element.get_binding_energy(site, state)
-            if state == neighbor_state:
-                deltaG += self.element.gamma.data.as_doubles[state-1]
-        return deltaG
-
-    @cython.boundscheck(False)
-    @cython.wraparound(False)
-    cdef void update_degeneracy(self,
-                                int state,
-                                int shift,
-                                int cshift) nogil:
         """
-        Update degeneracies for current site and pass to children.
+        Update current node.
 
         Args:
-        state (long) - index of current branch
-        shift (long) - index for current node
-        cshift (long) - index for subsequent node
+        depth (long) - depth of current node
+        branch (long) - state of current node
+        parent_branch (long) - state of parent node
+        deltaG (double) - free energy of parent node
         """
 
-        cdef int i
-        cdef double C, d
-        cdef int bshift
+        # get node index shifts (* note degeneracy is shifted 1 place)
+        cdef int shift = depth * self.Nc
+        cdef int cshift = shift + self.Nc
 
-        # if site is occupied, increment degeneracies and pass to children
-        if state != 0:
-            bshift = (state-1)*self.Nc
-            for i in xrange(self.Nc):
-                C = self.C.data.as_doubles[bshift+i]
-                d = self.degeneracy.data.as_doubles[shift+i] * C
-                self.degeneracy.data.as_doubles[cshift+i] = d
+        # initialize the weights for current branch
+        self.initialize_weights(shift)
 
-        # if site is unoccupied, pass existing degeneracies to children
-        else:
-            for i in xrange(self.Nc):
-                self.degeneracy.data.as_doubles[cshift+i] = self.degeneracy.data.as_doubles[shift+i]
+        # get free energy and update degeneracies
+        deltaG = self.update_free_energy(depth, branch, parent_branch, deltaG)
+        self.update_degeneracy(branch, shift, cshift)
 
-    @cython.boundscheck(False)
-    @cython.wraparound(False)
-    cdef void get_branch_weights(self,
-                                int shift,
-                                int cshift) nogil:
-        """ Add branch weights to current node. """
-        cdef int i
-        cdef double weight
-        for i in xrange(self.Nc):
-            weight = self.weights.data.as_doubles[shift+i] + self.weights.data.as_doubles[cshift+i]
-            self.weights.data.as_doubles[shift+i] = weight
+        # update all branches (run recursion)
+        self.update_branches(depth, branch, deltaG, shift, cshift)
+
+        # update partition for current node
+        self.update_partition(depth, branch, deltaG, shift, cshift)
 
     @cython.boundscheck(False)
     @cython.wraparound(False)
     cdef void update_branches(self,
-                    int site,
-                    int state,
-                    double deltaG,
-                    int shift,
-                    int cshift):
-        """
-        Update subsequent branches.
-
-        Args:
-        site (long) - index of current binding site
-        state (long) - index of current branch
-        deltaG (double) - free energy of root branch
-        shift (long) - index for current node
-        cshift (long) - index for subsequent node
-        """
-
-        cdef int i, new_state, new_site
-        cdef double weight
-        cdef cBranch branch
-        cdef dict branches
-
-        cdef double start
-
-        # if tree has not reached target depth, update all branches
-        if site < (self.element.Ns - 1):
-            new_site = site+1
-
-            # if new site is after cut point, create parallel branches
-            if new_site > self.cut_point:
-
-                start = time()
-
-                branches = {}
-                for new_state in range(self.element.b):
-                    branches[new_state] = cBranch(self, new_site, new_state)
-
-                # create parallel branches
-                for new_state in prange(self.element.b,
-                                        schedule='static',
-                                        nogil=True,
-                                        num_threads=2):
-
-                    # create independent branch
-                    with gil:
-                        branch = branches[new_state]
-                        #print('Branch: {:d}, start: {:0.2f}'.format(new_state, time()-start))
-
-                    # traverse branch
-                    self.update_branch(branch, new_site, new_state, state, deltaG)
-
-                    #with gil:
-                        #print('Branch: {:d}, stop: {:0.2f}'.format(new_state, time()-start))
-
-                    # add branch's weights to current node
-                    self.get_branch_weights(shift, cshift)
-
-            else:
-                for new_state in range(self.element.b):
-                    self.update_node(new_site, new_state, state, deltaG)
-                    self.get_branch_weights(shift, cshift)
-
-    # @cython.boundscheck(False)
-    # @cython.wraparound(False)
-    # cdef void update_branches(self,
-    #                 int site,
-    #                 int state,
-    #                 double deltaG,
-    #                 int shift,
-    #                 int cshift):
-    #     """
-    #     Update subsequent branches.
-
-    #     Args:
-    #     site (long) - index of current binding site
-    #     state (long) - index of current branch
-    #     deltaG (double) - free energy of root branch
-    #     shift (long) - index for current node
-    #     cshift (long) - index for subsequent node
-    #     """
-
-    #     cdef int i, new_state, new_site
-    #     cdef double weight
-    #     cdef cBranch branch
-
-    #     cdef double start
-
-    #     cdef double deltaG_threadsafe
-
-    #     cdef dict children = {}
-
-    #     # if tree has not reached target depth, update all branches
-    #     if site < (self.element.Ns - 1):
-    #         new_site = site+1
-
-    #         # if new site is after cut point, create parallel branches
-    #         if new_site > self.cut_point:
-
-    #             start = time()
-
-    #             # create parallel branches
-    #             for new_state in prange(self.element.b,
-    #                                     schedule='static',
-    #                                     nogil=True,
-    #                                     num_threads=self.element.b):
-
-    #                 # create independent branch
-    #                 with gil:
-    #                     branch = cBranch(self, new_site, new_state)
-    #                     print('\nBranch: {:d}, start: {:0.2f}'.format( new_state, time()-start))
-
-    #                     # traverse branch
-    #                     branch.update_node_nogil(0, new_state, state, deltaG)
-
-    #                 with gil:
-    #                     print('\nBranch: {:d}, stop: {:0.2f}'.format( new_state, time()-start))
-    #                     children[new_state] = branch
-
-
-    #             # store results
-
-    #             # add branch's weights to current node
-    #             #self.get_branch_weights(shift, cshift)
-
-    #         else:
-    #             for new_state in range(self.element.b):
-    #                 self.update_node(new_site, new_state, state, deltaG)
-    #                 self.get_branch_weights(shift, cshift)
-
-
-    @cython.boundscheck(False)
-    @cython.wraparound(False)
-    cdef void update_branch(self,
-                    cBranch child,
-                    int site,
-                    int state,
-                    int neighbor_state,
-                    double deltaG) nogil:
-        """ Instantiate and traverse independent branch. """
-
-        cdef int i
-        cdef int zshift = site * self.Nc
-        cdef int oshift = site * self.element.n * self.Nc
-        cdef double z, occupancy
-
-        # instantiate branch
-        #cdef cBranch child = cBranch(self, site, state)
-
-        # traverse branch (GIL is released here)
-        child.update_node_nogil(0, state, neighbor_state, deltaG)
-
-        # inherit weights, occupancies, and partition function
-        for i in xrange(self.Nc):
-
-            # inherit weights (copy top level)
-            self.weights.data.as_doubles[zshift+i] = child.weights.data.as_doubles[i]
-
-            # increment partition function (add total)
-            z = self.Z.data.as_doubles[i] + child.Z.data.as_doubles[i]
-            self.Z.data.as_doubles[i] = z
-
-        # update occupancies
-        for i in xrange(child.element.Ns*self.element.n*self.Nc):
-            occupancy = self.occupancies.data.as_doubles[oshift+i] + child.occupancies.data.as_doubles[i]
-            self.occupancies.data.as_doubles[oshift+i] = occupancy
-
-    @cython.boundscheck(False)
-    @cython.wraparound(False)
-    cdef void update_partition(self,
-                    int site,
-                    int state,
+                    int depth,
+                    int branch,
                     double deltaG,
                     int shift,
                     int cshift) nogil:
@@ -371,11 +213,113 @@ cdef class cTree:
         Update subsequent branches.
 
         Args:
-        site (long) - index of current binding site
-        state (long) - index of current branch
-        deltaG (double) - free energy of root branch
+        depth (long) - depth of current node
+        branch (long) - state of current node
+        deltaG (double) - free energy of current node
         shift (long) - index for current node
-        cshift (long) - index for subsequent node
+        cshift (long) - index for child node
+        """
+
+        cdef int child_branch
+
+        # if tree has not reached target depth, update all branches
+        if depth < (self.max_depth - 1):
+            for child_branch in xrange(self.element.b):
+                self.update_node(depth+1, child_branch, branch, deltaG)
+                self.inherit_branch_weights(shift, cshift)
+
+    @cython.boundscheck(False)
+    @cython.wraparound(False)
+    cdef double update_free_energy(self,
+                    int depth,
+                    int branch,
+                    int parent_branch,
+                    double deltaG) nogil:
+        """
+        Get microstate free energy.
+
+        Args:
+        depth (long) - depth of current node
+        branch (long) - state of current node
+        parent_branch (long) - state of parent node
+        deltaG (double) - free energy of parent node
+
+        Returns:
+        deltaG (double) - free energy of current node
+        """
+        if branch != 0:
+            deltaG += self.element.get_binding_energy(depth, branch)
+            if branch == parent_branch:
+                deltaG += self.element.gamma.data.as_doubles[branch-1]
+        return deltaG
+
+    @cython.boundscheck(False)
+    @cython.wraparound(False)
+    cdef void update_degeneracy(self,
+                    int branch,
+                    int shift,
+                    int cshift) nogil:
+        """
+        Update degeneracies for current site and pass to children.
+
+        Args:
+        branch (long) - state of current node
+        shift (long) - index for current node
+        cshift (long) - index for child node
+        """
+
+        cdef int i
+        cdef double C, d
+        cdef int bshift
+
+        # if site is occupied, increment degeneracies and pass to children
+        if branch != 0:
+            bshift = (branch-1)*self.Nc
+            for i in xrange(self.Nc):
+                C = self.C[bshift+i]
+                d = self.degeneracy[shift+i] * C
+                self.degeneracy[cshift+i] = d
+
+        # if site is unoccupied, pass existing degeneracies to children
+        else:
+            for i in xrange(self.Nc):
+                self.degeneracy[cshift+i] = self.degeneracy[shift+i]
+
+    @cython.boundscheck(False)
+    @cython.wraparound(False)
+    cdef void inherit_branch_weights(self,
+                                int shift,
+                                int cshift) nogil:
+        """
+        Add branch weights to current node.
+
+        Args:
+        shift (long) - index for current node
+        cshift (long) - index for child node
+        """
+        cdef int i
+        cdef double weight
+        for i in xrange(self.Nc):
+            weight = self.weights[shift+i] + self.weights[cshift+i]
+            self.weights[shift+i] = weight
+
+    @cython.boundscheck(False)
+    @cython.wraparound(False)
+    cdef void update_partition(self,
+                    int depth,
+                    int branch,
+                    double deltaG,
+                    int shift,
+                    int cshift) nogil:
+        """
+        Update subsequent branches.
+
+        Args:
+        depth (long) - current node depth
+        branch (long) - state of current node
+        deltaG (double) - free energy of current node
+        shift (long) - index for current node
+        cshift (long) - index for child node
         """
 
         cdef int i, index
@@ -384,145 +328,35 @@ cdef class cTree:
         cdef double degeneracy, weight, occupancy, z
 
         # if site is unoccupied, don't make any assignments
-        if state != 0:
+        if branch != 0:
 
             # evaluate partition weight
             exponential = exp(deltaG)
 
             # get shift index for occupancy array
-            oshift = (site*self.element.n*self.Nc) + ((state-1)*self.Nc)
+            oshift = (depth*self.element.n*self.Nc) + ((branch-1)*self.Nc)
 
             # update weights, occupancies, and partitions for each unique conc.
             for i in xrange(self.Nc):
 
                 # compute boltzmann factor
-                degeneracy = self.degeneracy.data.as_doubles[cshift+i]
+                degeneracy = self.degeneracy[cshift+i]
                 boltzmann = exponential * degeneracy
 
                 # update weights
                 index = shift+i
-                weight = self.weights.data.as_doubles[index] + boltzmann
-                self.weights.data.as_doubles[index] = weight
+                weight = self.weights[index] + boltzmann
+                self.weights[index] = weight
 
-                # assign weights to current site/occupant pair
+                # assign weights to current depth/branch pair
                 index = oshift + i
-                occupancy = self.occupancies.data.as_doubles[index]
-                self.occupancies.data.as_doubles[index] = occupancy + weight
+                occupancy = self.occupancies[index]
+                self.occupancies[index] = occupancy + weight
 
                 # update partition function
-                z = self.Z.data.as_doubles[i] + boltzmann
-                self.Z.data.as_doubles[i] = z
+                z = self.Z[i] + boltzmann
+                self.Z[i] = z
 
 
-cdef class cBranch(cTree):
-    """
-    Defines a ternary tree that may only be traversed sequentially.
 
-    Addtl. attributes:
-    root_id (long) - node depth before parallel branching
-    branch_id (long) - index of branch
-    """
 
-    # methods
-    def __init__(self,
-                 cTree tree,
-                 int cut_point,
-                 int branch_id):
-        """
-        Args:
-        tree (cTree) - parent tree from which branch is initiated
-        cut_point (long) - node depth before parallel branching
-        branch_id (long) - index of branch (not used)
-        """
-
-        cdef cElement element = tree.element.truncate(cut_point)
-        cTree.__init__(self, element, tree.Nc, tree.C, element.Ns)
-        self.branch_id = branch_id
-        self.root_id = cut_point
-        self.initialize_branch(tree)
-
-    @cython.boundscheck(False)
-    @cython.wraparound(False)
-    cdef void initialize_branch(self,
-                                cTree tree) nogil:
-        """
-        Initialize current branch.
-
-        Args:
-        tree (cTree) - parent tree from which branch is initiated
-        """
-        cdef int i
-        cdef double degeneracy
-        cdef int shift = self.root_id * tree.Nc
-
-        for i in xrange(self.Nc):
-
-            # copy root node degeneracy to top level of current branch
-            degeneracy = tree.degeneracy.data.as_doubles[shift+i]
-            self.degeneracy.data.as_doubles[i] = degeneracy
-
-            #self.degeneracy[i] = tree.degeneracy[shift+i]
-
-            # initialize partitions as zero
-            self.Z.data.as_doubles[i] = 0.
-
-    @cython.boundscheck(False)
-    @cython.wraparound(False)
-    cdef void update_node_nogil(self,
-                    int site,
-                    int state,
-                    int neighbor_state,
-                    double deltaG) nogil:
-        """
-        Update current node.
-
-        Args:
-        site (long) - index of current node
-        state (long) - index of current branch
-        neighbor_state (long) - index of parent branch
-        deltaG (double) - free energy of root branch
-        """
-
-        # get node index shifts (* note degeneracy is shifted 1 place)
-        cdef int shift = site * self.Nc
-        cdef int cshift = shift + self.Nc
-
-        # initialize the weights for current branch
-        self.initialize_weights(shift)
-
-        # get free energy and update degeneracies
-        deltaG = self.get_free_energy(site, state, neighbor_state, deltaG)
-        self.update_degeneracy(state, shift, cshift)
-
-        # update all branches (run recursion)
-        self.update_branches_nogil(site, state, deltaG, shift, cshift)
-
-        # update partition for current node
-        self.update_partition(site, state, deltaG, shift, cshift)
-
-    @cython.boundscheck(False)
-    @cython.wraparound(False)
-    cdef void update_branches_nogil(self,
-                    int site,
-                    int state,
-                    double deltaG,
-                    int shift,
-                    int cshift) nogil:
-        """
-        Update subsequent branches.
-
-        Args:
-        site (long) - index of current binding site
-        state (long) - index of current branch
-        deltaG (double) - free energy of root branch
-        shift (long) -
-        cshift (long) -
-        """
-
-        cdef int i, new_state
-
-        # if tree has not reached target depth, update all branches
-        if site < (self.element.Ns - 1):
-            for new_state in xrange(self.element.b):
-                self.update_node_nogil(site+1, new_state, state, deltaG)
-                self.get_branch_weights(shift, cshift)
