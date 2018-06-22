@@ -132,36 +132,37 @@ cdef class cParallelPF(cTree):
     Defines a partition function for a given binding element.
 
     Attributes:
-    element (cElement instance) - binding site element of length Ns
-    Nc (int) - number of unique protein concentration pairs
-    C (double*) - protein concentrations, flattened N x Nc
-    weights (double*) - boltzmann weights, flattened array
-    degeneracy (double*) - degeneracy terms, flattened (Ns+1) x Nc
-    occupancies (double*) - binding site occupancies, flattened Ns x N x Nc
-    Z (double*) - partition function values, 1 x Nc array
+        element (cElement instance) - binding site element of length Ns
+        Nc (int) - number of unique protein concentration pairs
+        C (double*) - protein concentrations, flattened N x Nc
+        weights (double*) - boltzmann weights, flattened array
+        degeneracy (double*) - degeneracy terms, flattened (Ns+1) x Nc
+        occupancies (double*) - binding site occupancies, flattened Ns x N x Nc
+        Z (double*) - partition function values, 1 x Nc array
     """
 
     @staticmethod
-    def from_python(element, concentrations, cut=None):
+    def from_python(element, concentrations, cut_depth=None):
         """
         Initialize partition function by constructing cTree instance.
 
         Args:
         element (Element instance) - binding element
         concentrations (np.ndarray) protein concentrations, Nc x 2 doubles
-        cut (None or int) - depth at which parallel branching occurs
+        cut_depth (None or int) - depth at which parallel branching occurs
         """
+        if cut_depth is None:
+            cut_depth = 0
+
         c_element = element.get_c_element()
         Nc = concentrations.shape[0]
         C = array('d', concentrations.T.flatten())
-        return cParallelPF(c_element, Nc, C, 0, 0)
+        return cParallelPF(c_element, Nc, C, 0, cut_depth=cut_depth)
 
     @cython.boundscheck(False)
     @cython.wraparound(False)
     cpdef void evaluate_occupancies(self):
         """ Traverse tree and evaluate occupancies. """
-
-        self.set_root(0, np.ones(self.Nc, np.float64))
         self.traverse()
         self.normalize()
 
@@ -176,7 +177,7 @@ cdef class cParallelPF(cTree):
         # construct occupancies ndarray from occupancies ptr
         cdef int i
         cdef int size = shape[0] * shape[1] * shape[2]
-        cdef np.ndarray[double, ndim=1] occupancies = np.zeros(size, np.float64)
+        cdef np.ndarray[double,ndim=1] occupancies = np.zeros(size, np.float64)
         for i in xrange(size):
             occupancies[i] = self.occupancies[i]
 
@@ -201,44 +202,6 @@ cdef class cParallelPF(cTree):
                 self.occupancies[shift+j] = occupancy
 
 
-
-# cdef class cParallelPF(cTree):
-
-#     def __init__(self, element, concentrations, cut=None):
-#         cdef cElement c_element = element.get_c_element()
-#         cdef int Nc = concentrations.shape[0]
-
-#         # set cut point for parallelization (splits branches after cut_point)
-#         cdef int cut_point
-#         if cut is None:
-#             cut_point = 0
-#         else:
-#             cut_point = cut
-
-#         cdef array C = array('d', concentrations.T.flatten())
-#         cTree.__init__(self, c_element, Nc, C, cut_point)
-
-#     cpdef array get_occupancies(self):
-#         """ Get flattened b x Ns occupancy array. """
-#         self.traverse()
-#         self.normalize()
-#         return self.occupancies
-
-#     @cython.boundscheck(False)
-#     @cython.wraparound(False)
-#     cdef void normalize(self) with gil:
-#         """ Normalize occupancies by partition function value. """
-#         cdef int i, j
-#         cdef double occupancy, Z
-#         cdef int shift
-#         for i in xrange(self.element.Ns*self.element.n):
-#             shift = i*self.Nc
-#             for j in xrange(self.Nc):
-#                 Z = self.Z.data.as_doubles[j]
-#                 occupancy = self.occupancies.data.as_doubles[shift+j] / Z
-#                 self.occupancies.data.as_doubles[shift+j] = occupancy
-
-
 class PartitionFunction:
     """ Defines a partition function that enumerates probabilities of all element microstates for a given set of protein concentrations. """
 
@@ -249,11 +212,11 @@ class PartitionFunction:
         self.concentrations = concentrations
         self.Nc = concentrations.shape[0]
 
-    def c_get_occupancies_parallel(self, cut=None):
+    def c_get_occupancies_parallel(self, cut_depth=None):
         """ Get Ns x b x Nc occupancy array. """
 
         # instantiate partition function
-        c_pf = cParallelPF.from_python(self.element, self.concentrations, cut)
+        c_pf = cParallelPF.from_python(self.element, self.concentrations, cut_depth)
 
         # evaluate partition function and get occupancies
         c_pf.evaluate_occupancies()
