@@ -60,6 +60,12 @@ class ConcentrationSweep:
         self.cmax = self.get_tuple(cmax)
         self.Nc = self.get_tuple(Nc)
 
+        # set concentrations
+        self.Cx = np.linspace(self.cmin[0], self.cmax[0], self.Nc[0]) * 1E-9
+        self.Cy = np.linspace(self.cmin[1], self.cmax[1], self.Nc[1]) * 1E-9
+        xx, yy = np.meshgrid(*(self.Cx, self.Cy), indexing='xy')
+        self.concentrations = np.stack((xx.T, yy.T)).reshape(2, -1).T
+
     @staticmethod
     def get_tuple(x):
         if type(x) in (float, int, np.float64, np.int64):
@@ -67,53 +73,30 @@ class ConcentrationSweep:
         else:
             return x
 
-    def get_occupancies(self, element, parallel=False, cut_depth=None):
+    def get_occupancies(self, element, cut_depth=None):
         """
         Evaluate binding site occupancies.
 
         Args:
         element (Element instance) - binding element
-        parallel (bool) - if True, use parallel implementation
-        cut_depth (int) - trees are parallelized below cut depth
+        cut_depth (int) - depth at which parallel evaluation of subtrees occurs
         """
-        return Occupancies(element, parallel, cut_depth, **self.__dict__)
+        return Occupancies(element, cut_depth, cmin=self.cmin, cmax=self.cmax, Nc=self.Nc, names=self.names)
 
 
 class Occupancies(ConcentrationSweep):
     """ Defines occupancies of an element under a set of concentrations. """
 
-    def __init__(self, element, parallel=False, cut_depth=None, **kwargs):
+    def __init__(self, element, cut_depth=None, **kwargs):
         ConcentrationSweep.__init__(self, **kwargs)
 
-        # set concentrations
-        self.Cx = np.linspace(self.cmin[0], self.cmax[0], self.Nc[0]) * 1E-9
-        self.Cy = np.linspace(self.cmin[1], self.cmax[1], self.Nc[1]) * 1E-9
-        xx, yy = np.meshgrid(*(self.Cx, self.Cy), indexing='xy')
-        self.concentrations = np.stack((xx.T, yy.T)).reshape(2, -1).T
-
         # set occupancies
-        if parallel:
-            self.set_occupancies_parallel(element, cut_depth=cut_depth)
-        else:
-            self.set_occupancies(element)
+        self.set_occupancies(element, cut_depth=cut_depth)
 
-    def set_occupancies(self, element, method='base'):
-        """ Get Ns x Nc x b occupancy array. """
-        alist = []
-        for C in self.concentrations:
-            pf = PartitionFunction(element, C)
-            occupancies = pf.c_get_occupancies(method=method)
-            alist.append(occupancies.T.reshape(element.Ns, element.b))
-        self.occupancies = np.stack(alist, axis=1)
-        self.total_occupancy = self.occupancies[:,:,1:].sum(axis=-1)
-        self.ets = np.array([i for i, x in enumerate(element.ets) if x == 1]).reshape(-1, 1)
-        self.Ns = element.Ns
-        self.fit_model()
-
-    def set_occupancies_parallel(self, element, cut_depth=None):
+    def set_occupancies(self, element, cut_depth=None):
         """ Get Ns x Nc x b occupancy array. """
         pf = PartitionFunction(element, self.concentrations)
-        occupancies = pf.c_get_occupancies_parallel(cut_depth)
+        occupancies = pf.c_get_occupancies(cut_depth)
         self.occupancies = np.swapaxes(occupancies, 1, 2)
         self.total_occupancy = self.occupancies[:,:,1:].sum(axis=-1)
         self.ets = np.array([i for i, x in enumerate(element.ets) if x == 1]).reshape(-1, 1)

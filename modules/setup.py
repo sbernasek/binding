@@ -5,12 +5,22 @@ from numpy import get_include
 import os
 
 #args = ['-Xpreprocessor', '-fopenmp', '-lomp']#, '-I/usr/local/opt/libomp/include', '-L/usr/local/opt/libomp/lib']
-args = ['-fopenmp']
+# -w disables warning about deprecated NumPy API
+#args = ['-w', '-fopenmp']
+args = ['-w']
 
 ext_modules = [
     Extension("elements",
             ["elements.pyx"],
-            include_dirs=['.']),
+            include_dirs=['.'],
+            extra_compile_args=['-w']
+            ),
+
+    Extension("parallel",
+            ["parallel.pyx"],
+            include_dirs=['.'],
+            extra_compile_args=['-w']
+            ),
 
     Extension("trees",
             ["trees.pyx"],
@@ -23,11 +33,6 @@ ext_modules = [
             include_dirs=['.'],
             extra_compile_args=args,
             extra_link_args=args),
-
-    # Extension("ptest", ["ptest.pyx"],
-    #             include_dirs=['.'],
-    #             extra_compile_args=args,
-    #             extra_link_args=args)
     ]
 
 setup(
