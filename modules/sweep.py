@@ -110,7 +110,7 @@ class Occupancies(ConcentrationSweep):
         else:
             zz = self.occupancies[site, :, self.names[species]].reshape(*self.Nc)
 
-        fig = self.show(zz.T, species, **kwargs)
+        fig = self.show(zz.T, **kwargs)
         fig.suptitle('Site N={:d}'.format(site), fontsize=9)
         return fig
 
@@ -128,9 +128,28 @@ class Occupancies(ConcentrationSweep):
         else:
             zz = self.occupancies[:, :, self.names[species]].mean(axis=0).reshape(*self.Nc)
 
-        fig = self.show(zz.T, species, mask=mask, **kwargs)
+        fig = self.show(zz.T, mask=mask, **kwargs)
         if title:
             fig.suptitle('Over all sites', fontsize=9)
+        return fig
+
+    def plot_mapping(self, func, title=None, **kwargs):
+        """ 
+        Visualizes mapping applied to Pnt and Yan occupancy. 
+        
+        Args:
+            func (function(pnt, yan)) - function applied to pnt/yan occupancy
+            title (str) - figure suptitle
+        """
+
+        # get occupancy by each species
+        pnt = self.occupancies[:, :, self.names['Pnt']].mean(axis=0).reshape(*self.Nc)
+        yan = self.occupancies[:, :, self.names['Yan']].mean(axis=0).reshape(*self.Nc)
+
+        # plot function output
+        fig = self.show(func(pnt, yan).T, **kwargs)
+        if title is not None:
+            fig.suptitle(title, fontsize=9)
         return fig
 
     def plot_colorbar(figsize=(5, 1), vmin=0, vmax=1, cmap=plt.cm.plasma):
@@ -148,7 +167,7 @@ class Occupancies(ConcentrationSweep):
         #ax_cbar.xaxis.set_major_formatter(FormatStrFormatter('%2.0f'))
         return fig
 
-    def show(self, zz, name=None, mask=None, cmap=plt.cm.plasma, vmin=0, vmax=1, stretch=True, bg_color=70, figsize=(4, 4)):
+    def show(self, zz, mask=None, cmap=plt.cm.plasma, vmin=0, vmax=1, stretch=True, bg_color=70, figsize=(4, 4)):
 
         # create figure
         fig, ax = plt.subplots(figsize=figsize)
@@ -156,7 +175,6 @@ class Occupancies(ConcentrationSweep):
         # create image
         norm = Normalize(vmin, vmax)
         im = cmap(norm(zz))
-
 
         # apply mask as transparency
         if mask is not None:
