@@ -12,6 +12,116 @@ from elements cimport cElement
 from parallel cimport cSubprocess
 
 
+cdef class cCachedNode:
+
+    def __cinit__(self,
+                  int Ns,
+                  int n,
+                  int Nc,
+                  int depth,
+                  **kwargs):
+        """
+        Args:
+        tree (cTree instance) - tree to be cached
+        kwargs - empty container for subclassing (cython requirement)
+        """
+
+        # set tree attributes
+        self.Ns = Ns - depth
+        self.n = n
+        self.Nc = Nc
+
+        # initialize occupancies as zero
+        self.allocate_memory()
+
+    def __dealloc__(self):
+        """ Deallocate memory blocks. """
+
+        PyMem_Free(self.degeneracy)
+        PyMem_Free(self.weights)
+        PyMem_Free(self.occupancies)
+        PyMem_Free(self.Z)
+        PyMem_Free(self.scalar)
+
+    cdef void allocate_memory(self):
+        """ Initialize all arrays (requires GIL for memory allocation) """
+
+        # get dimensions
+        cdef int i
+        cdef int o_shape = self.Ns*self.n*self.Nc
+
+        # allocate memory for degeneracy
+        self.degeneracy = <double*> PyMem_Malloc(self.Nc * sizeof(double))
+        for i in xrange(self.Nc):
+            self.degeneracy[i] = 1
+        if not self.degeneracy:
+            raise MemoryError('Degeneracy memory block not allocated.')
+
+        # allocate memory for weights
+        self.weights = <double*> PyMem_Malloc(self.Nc * sizeof(double))
+        for i in xrange(self.Nc):
+            self.weights[i] = 0
+        if not self.weights:
+            raise MemoryError('Weights memory block not allocated.')
+
+        # allocate memory for occupancies
+        self.occupancies = <double*> PyMem_Malloc(o_shape * sizeof(double))
+        for i in xrange(o_shape):
+            self.occupancies[i] = 0
+        if not self.occupancies:
+            raise MemoryError('Occupancies memory block not allocated.')
+
+        # allocate memory for partition function
+        self.Z = <double*> PyMem_Malloc(self.Nc * sizeof(double))
+        for i in xrange(self.Nc):
+            self.Z[i] = 0
+        if not self.Z:
+            raise MemoryError('Z memory block not allocated.')
+
+        # allocate memory for scalar cache correction factors
+        self.scalar = <double*> PyMem_Malloc(self.Nc * sizeof(double))
+        for i in xrange(self.Nc):
+            self.scalar[i] = 0
+        if not self.scalar:
+            raise MemoryError('Scalar memory block not allocated.')
+
+    cdef void initialize(self, cTree tree, double deltaG) nogil:
+        """ Store state of tree before evaluation. """
+
+        cdef int shift = self.depth * self.Nc
+        cdef int oshift = self.depth * self.n * self.Nc
+        cdef int i
+
+        # store deltaG
+        self.deltaG = deltaG
+
+        # initialize degeneracies, weights, and partition function
+        for i in xrange(self.Nc):
+            self.degeneracy[i] = tree.degeneracy[shift+i]
+            self.weights[i] = tree.weights[shift+i]
+            self.Z[i] = tree.Z[i]
+
+        # initialize occupancies
+        for i in xrange(self.Ns*self.n*self.Nc):
+            self.occupancies[i] = tree.occupancies[oshift+i]
+
+    cdef void write(self, cTree tree) nogil:
+        """ Cache change in state of tree. """
+
+        cdef int shift = self.depth * self.Nc
+        cdef int oshift = self.depth * self.n * self.Nc
+        cdef int i
+
+        # initialize degeneracies, weights, and partition function
+        for i in xrange(self.Nc):
+            self.weights[i] = (tree.weights[shift+i] - self.weights[i])
+            self.Z[i] = (tree.Z[i] - self.Z[i])
+
+        # initialize occupancies
+        for i in xrange(self.Ns*self.n*self.Nc):
+            self.occupancies[i] = (tree.occupancies[oshift+i] - self.occupancies[i])
+
+
 cdef class cTree:
     """
     Defines a ternary tree that may be traversed sequentially.
@@ -63,17 +173,18 @@ cdef class cTree:
         # initialize occupancies as zero
         self.allocate_root_memory()
 
+        # initialize cache ( {depth: {branch: cCachedNode}} )
+        self.cache = {d: {b: None for b in range(self.element.b)} for d in range(self.max_depth)}
+
     def __dealloc__(self):
         """ Deallocate memory blocks. """
 
         #printf("\nDeallocating leaf %d", self.tree_id)
-
         PyMem_Free(self.degeneracy)
         PyMem_Free(self.weights)
         PyMem_Free(self.root_weights)
         PyMem_Free(self.occupancies)
         PyMem_Free(self.Z)
-        # print('Called DEALLOC for branch {:d}\n'.format(self.tree_id))
 
     def __reduce__(self):
         """ Instance reduction for pickling. """
@@ -322,7 +433,7 @@ cdef class cTree:
 
     @cython.boundscheck(False)
     @cython.wraparound(False)
-    cdef void traverse_tree(self) nogil:
+    cdef void traverse_tree(self):
         """ Traverse all nodes. """
         cdef int i, branch
 
@@ -340,7 +451,7 @@ cdef class cTree:
                     int depth,
                     int branch,
                     int parent_branch,
-                    double deltaG) nogil:
+                    double deltaG):
         """
         Update current node.
 
@@ -350,6 +461,8 @@ cdef class cTree:
         parent_branch (long) - state of parent node
         deltaG (double) - free energy of parent node
         """
+
+        cdef cCachedNode cached_node
 
         # get node index shifts (* note degeneracy is shifted 1 place)
         cdef int shift = depth * self.Nc
@@ -362,11 +475,18 @@ cdef class cTree:
         deltaG = self.update_free_energy(depth, branch, parent_branch, deltaG)
         self.update_degeneracy(branch, shift, cshift)
 
+        # create cache for current node
+        cached_node = self.create_cached_node(depth, deltaG)
+
         # update all branches
         self.update_branches(depth, branch, deltaG, shift, cshift)
 
         # update partition for current node
         self.update_partition(depth, branch, deltaG, shift, cshift)
+
+        # update and save cache
+        cached_node.write(self)
+        self.cache[depth][branch] = cached_node
 
     @cython.boundscheck(False)
     @cython.wraparound(False)
@@ -375,7 +495,7 @@ cdef class cTree:
                     int branch,
                     double deltaG,
                     int shift,
-                    int cshift) nogil:
+                    int cshift):
         """
         If tree has not reached target depth, evaluate all branches.
 
@@ -396,7 +516,7 @@ cdef class cTree:
                     int branch,
                     double deltaG,
                     int shift,
-                    int cshift) nogil:
+                    int cshift):
         """
         Update subsequent branches.
 
@@ -409,8 +529,54 @@ cdef class cTree:
         """
         cdef int child_branch
         for child_branch in xrange(self.element.b):
-            self.update_node(depth+1, child_branch, branch, deltaG)
-            self.inherit_branch_weights(shift, cshift)
+
+            # read branch from cache if available
+            if self.cache[depth+1][child_branch] is not None:
+                self.read_cached_node(depth+1, child_branch, deltaG, shift)
+
+            # evaluate branch
+            else:
+                self.update_node(depth+1, child_branch, branch, deltaG)
+                self.inherit_branch_weights(shift, cshift)
+
+    cdef cCachedNode create_cached_node(self,
+                                      int depth,
+                                      double deltaG):
+        """ Initialize cache for current node. """
+        cdef cCachedNode cache
+        cache = cCachedNode(self.max_depth, self.element.n, self.Nc, depth)
+        cache.initialize(self, deltaG)
+        return cache
+
+    cdef void read_cached_node(self,
+                        int depth,
+                        int branch,
+                        double deltaG,
+                        int shift):
+        """ Read node from cache. """
+
+        cdef cCachedNode cache = self.cache[depth][branch]
+        cdef double expo, scalar, occupancy
+        cdef int i, j, oshift, cshift
+
+        # read corrected weights and partition function
+        expo = exp(deltaG-cache.deltaG)
+        for i in xrange(cache.Nc):
+            if cache.degeneracy[i] == 0:
+                scalar = 0
+            else:
+                scalar = expo * (self.degeneracy[shift+i]/cache.degeneracy[i])
+            self.weights[shift+i] += (cache.weights[i] * scalar)
+            self.Z[i] += (cache.Z[i] * scalar)
+            cache.scalar[i] = scalar
+
+        # read corrected occupancies
+        oshift = depth * cache.n * cache.Nc
+        for j in xrange(cache.Ns*cache.n):
+            cshift = j * cache.Nc
+            for i in xrange(cache.Nc):
+                occupancy = cache.scalar[i] * cache.occupancies[cshift+i]
+                self.occupancies[oshift+cshift+i] += occupancy
 
 
 cdef class cRoot(cTree):
@@ -472,7 +638,7 @@ cdef class cRoot(cTree):
                     int branch,
                     double deltaG,
                     int shift,
-                    int cshift) nogil:
+                    int cshift):
         """
         Inherit leaves from below cut depth then update branches above.
 
@@ -661,6 +827,7 @@ cpdef cTree rebuild_tree(tuple init_attr, tuple buffer_attr):
         tree (cTree instance)
     """
     cdef int i, d_shape, w_shape, o_shape
+    cdef array degeneracy, weights, root_weights, occupancies, Z
     cdef cTree tree
 
     # initialize tree

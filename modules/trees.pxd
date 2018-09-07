@@ -7,9 +7,33 @@ from elements cimport cElement
 from cpython.array cimport array
 
 
+cdef class cCachedNode:
+
+    # attributes
+    cdef int Ns
+    cdef int n
+    cdef int Nc
+    cdef int depth
+    cdef double deltaG
+    cdef double *degeneracy
+    cdef double *weights
+    cdef double *occupancies
+    cdef double *Z
+    cdef double *scalar
+
+    # methods
+
+    cdef void allocate_memory(self)
+
+    cdef void initialize(self, cTree tree, double deltaG) nogil
+
+    cdef void write(self, cTree tree) nogil
+
+
 cdef class cTree:
 
     # attributes
+    cdef dict cache
     cdef cElement element
     cdef int max_depth
     cdef int Nc
@@ -61,27 +85,37 @@ cdef class cTree:
                     int shift,
                     int cshift) nogil
 
-    cdef void traverse_tree(self) nogil
+    cdef void traverse_tree(self)
 
     cdef void update_node(self,
                     int depth,
                     int branch,
                     int parent_branch,
-                    double deltaG) nogil
+                    double deltaG)
 
     cdef void update_branches(self,
                     int depth,
                     int parent_branch,
                     double deltaG,
                     int shift,
-                    int cshift) nogil
+                    int cshift)
 
     cdef void evaluate_branches(self,
                     int depth,
                     int parent_branch,
                     double deltaG,
                     int shift,
-                    int cshift) nogil
+                    int cshift)
+
+    cdef cCachedNode create_cached_node(self,
+                    int depth,
+                    double deltaG)
+
+    cdef void read_cached_node(self,
+                    int depth,
+                    int branch,
+                    double deltaG,
+                    int shift)
 
 
 cdef class cRoot(cTree):
