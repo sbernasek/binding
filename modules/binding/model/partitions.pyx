@@ -1,3 +1,5 @@
+__author__ = 'Sebastian Bernasek'
+
 # cython: boundscheck=False
 # cython: wraparound=False
 # cython: profile=False

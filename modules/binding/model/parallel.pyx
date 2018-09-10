@@ -1,7 +1,11 @@
+__author__ = 'Sebastian Bernasek'
+
 # cython: boundscheck=False
 # cython: wraparound=False
 # cython: profile=False
 from multiprocessing import Queue, Process
+
+from parallel cimport cSubprocess
 
 
 cdef class cSubprocess:
@@ -27,3 +31,4 @@ cdef class cSubprocess:
         _ = [p.join() for p in self.processes]
 
         return results
+

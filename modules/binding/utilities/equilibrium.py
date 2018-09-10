@@ -1,3 +1,5 @@
+__author__ = 'Sebastian Bernasek'
+
 import numpy as np
 
 

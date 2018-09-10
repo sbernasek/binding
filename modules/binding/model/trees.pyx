@@ -1,15 +1,19 @@
+__author__ = 'Sebastian Bernasek'
+
 # cython: boundscheck=False
 # cython: wraparound=False
 # cython: profile=False
 
 
 import cython
-from cpython.mem cimport PyMem_Malloc, PyMem_Free
 from cpython.array cimport array, clone
+from cpython.mem cimport PyMem_Malloc, PyMem_Free
 from libc.math cimport exp
 from libc.stdio cimport printf
+
 from elements cimport cElement
 from parallel cimport cSubprocess
+from trees cimport cTree, cRoot
 
 
 cdef class cTree:

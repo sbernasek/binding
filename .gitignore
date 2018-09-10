@@ -1,3 +1,4 @@
+*.txt
 profiling/*
 modules/build/*
 *.pyc

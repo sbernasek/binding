@@ -1,10 +1,13 @@
+__author__ = 'Sebastian Bernasek'
+
 # cython: boundscheck=False
 # cython: wraparound=False
 # cython: profile=False
 
+from cpython.array cimport array
+
 # import binding element
 from elements cimport cElement
-from cpython.array cimport array
 
 
 cdef class cTree:

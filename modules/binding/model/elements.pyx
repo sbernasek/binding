@@ -1,3 +1,5 @@
+__author__ = 'Sebastian Bernasek'
+
 # cython: boundscheck=False
 # cython: wraparound=False
 # cython: profile=False
@@ -7,8 +9,10 @@ import numpy as np
 cimport numpy as np
 from array import array
 from cpython.array cimport array, clone
-from bits cimport get_ternary_repr, c_bits_to_int
 from libc.math cimport exp
+
+from bits cimport get_ternary_repr, c_bits_to_int
+from elements cimport cElement
 
 
 cdef class cElement:
@@ -57,7 +61,9 @@ cdef class cElement:
 
     @cython.boundscheck(False)
     @cython.wraparound(False)
-    cdef double get_binding_energy(self, int site_index, int site_state) with gil:
+    cdef double get_binding_energy(self,
+                                   int site_index,
+                                   int site_state) with gil:
         """ Get binding energy for single site. """
         cdef double energy
         if self.ets.data.as_longs[site_index] == 1:

@@ -20,7 +20,9 @@ cdef inline tuple get_ternary_repr(unsigned int x):
     c_set_ternary_bits(x, n, bits)
     return (n, bits)
 
-cdef inline void c_set_ternary_bits(unsigned int x, int n, array bits) nogil:
+cdef inline void c_set_ternary_bits(unsigned int x,
+                                    int n,
+                                    array bits) nogil:
     """ Sets ternary bit values. """
     cdef unsigned int base, num
 
@@ -32,7 +34,9 @@ cdef inline void c_set_ternary_bits(unsigned int x, int n, array bits) nogil:
         x -= num*base
         n -= 1
 
-cdef inline unsigned int c_bits_to_int(array bits, unsigned int n, unsigned int base) nogil:
+cdef inline unsigned int c_bits_to_int(array bits,
+                                       unsigned int n,
+                                       unsigned int base) nogil:
     """ Converts bits to integer value (cython only). """
     cdef unsigned int index
     cdef unsigned int k = 0
@@ -40,6 +44,8 @@ cdef inline unsigned int c_bits_to_int(array bits, unsigned int n, unsigned int 
         k += bits.data.as_uints[index] * (base**index)
     return k
 
-cdef inline unsigned int bits_to_int(array bits, unsigned int n, unsigned int base):
+cdef inline unsigned int bits_to_int(array bits,
+                                     unsigned int n,
+                                     unsigned int base):
     """ Converts bits to integer value (python interface). """
     return c_bits_to_int(bits, n, base)
