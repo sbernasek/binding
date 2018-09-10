@@ -1,3 +1,5 @@
+__author__ = 'Sebastian Bernasek'
+
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.colors import Normalize
@@ -6,37 +8,11 @@ from matplotlib import gridspec
 from matplotlib.ticker import FormatStrFormatter
 from scipy.spatial import distance_matrix
 
-from partitions import PartitionFunction
-from hill import HillModel
+from .hill import HillModel
+from binding.model.partitions import PartitionFunction
 
 
-tickpad=2
-plt.rcParams['font.family'] = 'sans-serif'
-plt.rcParams['font.sans-serif'] = ['Arial']
-plt.rcParams['pdf.fonttype'] = 42
-plt.rcParams['ps.fonttype'] = 42
-plt.rcParams['axes.labelsize'] = 8
-plt.rcParams['axes.labelcolor'] = 'k'
-plt.rcParams['axes.linewidth'] = 1
-plt.rcParams['axes.labelpad'] = 1
-plt.rcParams['xtick.major.width'] = 1
-plt.rcParams['xtick.minor.width'] = 1
-plt.rcParams['xtick.major.size'] = 3
-plt.rcParams['xtick.minor.size'] = 1
-plt.rcParams['xtick.major.pad'] = tickpad
-plt.rcParams['xtick.labelsize'] = 7
-plt.rcParams['xtick.direction'] = 'in'
-plt.rcParams['ytick.major.width'] = 1
-plt.rcParams['ytick.minor.width'] = 1
-plt.rcParams['ytick.major.size'] = 3
-plt.rcParams['ytick.minor.size'] = 1
-plt.rcParams['ytick.major.pad'] = tickpad
-plt.rcParams['ytick.labelsize'] = 7
-plt.rcParams['ytick.direction'] = 'in'
-
-
-
-class ConcentrationSweep:
+class Grid:
     """ Class defines a set of pairwise protein concentrations. """
 
     def __init__(self, cmin=0, cmax=100, Nc=25, names=None):
@@ -84,11 +60,13 @@ class ConcentrationSweep:
         return Occupancies(element, cut_depth, cmin=self.cmin, cmax=self.cmax, Nc=self.Nc, names=self.names)
 
 
-class Occupancies(ConcentrationSweep):
-    """ Defines occupancies of an element under a set of concentrations. """
+class Occupancies(Grid):
+    """
+    Object containing equilibrium binding site occupancies of a binding element for all pairwise concentrations in a concentration grid.
+    """
 
     def __init__(self, element, cut_depth=None, **kwargs):
-        ConcentrationSweep.__init__(self, **kwargs)
+        Grid.__init__(self, **kwargs)
 
         # set occupancies
         self.set_occupancies(element, cut_depth=cut_depth)
@@ -110,11 +88,16 @@ class Occupancies(ConcentrationSweep):
         else:
             zz = self.occupancies[site, :, self.names[species]].reshape(*self.Nc)
 
-        fig = self.show(zz.T, **kwargs)
+        ax = self.show(zz.T, **kwargs)
+        fig = plt.gcf()
         fig.suptitle('Site N={:d}'.format(site), fontsize=9)
-        return fig
+        return ax
 
-    def plot_overall_occupancy(self, species='Pnt', mask=None, title=False, **kwargs):
+    def plot_overall_occupancy(self,
+                               species='Pnt',
+                               mask=None,
+                               title=False,
+                               **kwargs):
         """ Plot overall occupancy across the entire element. """
 
         # get total occupancy
@@ -128,15 +111,16 @@ class Occupancies(ConcentrationSweep):
         else:
             zz = self.occupancies[:, :, self.names[species]].mean(axis=0).reshape(*self.Nc)
 
-        fig = self.show(zz.T, mask=mask, **kwargs)
+        ax = self.show(zz.T, mask=mask, **kwargs)
         if title:
+            fig = plt.gcf()
             fig.suptitle('Over all sites', fontsize=9)
-        return fig
+        return ax
 
     def plot_mapping(self, func, title=None, **kwargs):
-        """ 
-        Visualizes mapping applied to Pnt and Yan occupancy. 
-        
+        """
+        Visualizes mapping applied to Pnt and Yan occupancy.
+
         Args:
             func (function(pnt, yan)) - function applied to pnt/yan occupancy
             title (str) - figure suptitle
@@ -147,10 +131,11 @@ class Occupancies(ConcentrationSweep):
         yan = self.occupancies[:, :, self.names['Yan']].mean(axis=0).reshape(*self.Nc)
 
         # plot function output
-        fig = self.show(func(pnt, yan).T, **kwargs)
+        ax = self.show(func(pnt, yan).T, **kwargs)
         if title is not None:
+            fig = plt.gcf()
             fig.suptitle(title, fontsize=9)
-        return fig
+        return ax
 
     def plot_colorbar(figsize=(5, 1), vmin=0, vmax=1, cmap=plt.cm.plasma):
 
@@ -160,17 +145,25 @@ class Occupancies(ConcentrationSweep):
         ax_cbar.xaxis.set_ticks_position('top')
         cbar.set_ticks(np.arange(0, 1.1, .2))
         ax_cbar.tick_params(labelsize=7, pad=1)
-        label = 'Fractional Occupancy'
+        label = 'Occupancy'
         if name is not None:
             label = label + ' ({:s})'.format(name)
         cbar.set_label(label, fontsize=8, labelpad=5)
         #ax_cbar.xaxis.set_major_formatter(FormatStrFormatter('%2.0f'))
         return fig
 
-    def show(self, zz, mask=None, cmap=plt.cm.plasma, vmin=0, vmax=1, stretch=True, bg_color=70, figsize=(4, 4)):
+    def show(self, zz,
+             mask=None,
+             cmap=plt.cm.plasma,
+             vmin=0, vmax=1,
+             stretch=True,
+             bg_color=70,
+             figsize=(4, 4),
+             ax=None):
 
         # create figure
-        fig, ax = plt.subplots(figsize=figsize)
+        if ax is None:
+            fig, ax = plt.subplots(figsize=figsize)
 
         # create image
         norm = Normalize(vmin, vmax)
@@ -193,7 +186,7 @@ class Occupancies(ConcentrationSweep):
         # format ticks
         self.format_ticks(ax, stretch=stretch)
 
-        return fig
+        return ax
 
     def format_ticks(self, ax, format_x=True, format_y=True, stretch=True):
 
@@ -215,7 +208,7 @@ class Occupancies(ConcentrationSweep):
             aspect = 1
         ax.set_aspect(aspect)
 
-    def plot_contours(self, species='Pnt', variable='Pnt', fixed=0, cmap=plt.cm.viridis, figsize=(4, 4)):
+    def plot_contours(self, species='Pnt', variable='Pnt', fixed=0, cmap=plt.cm.viridis, fig=None, figsize=(4, 4)):
 
         # get data
         species_dim = self.names[species]
@@ -234,7 +227,8 @@ class Occupancies(ConcentrationSweep):
             fixed_species = 'Pnt'
 
         # create figure
-        fig = plt.figure(figsize=figsize)
+        if fig is None:
+            fig = plt.figure(figsize=figsize)
         gs = gridspec.GridSpec(nrows=2, ncols=1, height_ratios=(1, 8), hspace=0.15)
         fig.suptitle('Fixed {:0.1f} nM {:s}'.format(fixed_concentration, fixed_species), fontsize=9)
 
@@ -249,7 +243,7 @@ class Occupancies(ConcentrationSweep):
         ax0.xaxis.set_ticks_position('top')
         ax0.set_xticks(np.arange(N)-0.5)
         ax0.set_xticklabels([])
-        ax0.tick_params(labelsize=8, pad=0)
+        ax0.tick_params(labelsize=8, pad=0, length=0, width=0.5)
 
         # add ETS sites
         for site_index in self.ets:
@@ -264,7 +258,7 @@ class Occupancies(ConcentrationSweep):
 
         ax1.set_ylim(0, 1)
         ax1.set_xlim(concentration.min(), concentration.max())
-        ax1.set_ylabel('Fractional occupancy ({:s})'.format(species), fontsize=8)
+        ax1.set_ylabel('Occupancy ({:s})'.format(species), fontsize=8)
         ax1.set_xlabel('{:s} concentration (nM)'.format(variable), fontsize=8)
 
         return fig
@@ -312,7 +306,7 @@ class Occupancies(ConcentrationSweep):
         else:
             ax1.set_xlim(self.Cy.min()*1e9, self.Cy.max()*1e9)
 
-        ax1.set_ylabel('Fractional occupancy ({:s})'.format(variable), fontsize=8)
+        ax1.set_ylabel('Occupancy ({:s})'.format(variable), fontsize=8)
         ax1.set_xlabel('{:s} concentration (nM)'.format(variable), fontsize=8)
 
         return fig, cmap, norm
@@ -366,7 +360,7 @@ class Occupancies(ConcentrationSweep):
             ax.plot(x, prediction, '-', color=color, linewidth=2)
             ax.scatter(x, data, c=color, s=50, marker=r'$\diamond$')
 
-        _ = ax.set_ylabel('Fractional occupancy (Pnt)', fontsize=8)
+        _ = ax.set_ylabel('Occupancy (Pnt)', fontsize=8)
         _ = ax.set_xlabel('Pnt concentration (nM)', fontsize=8)
         ax.spines['top'].set_visible(False)
         ax.spines['right'].set_visible(False)
