@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 from figures.base import Base
 from figures.settings import *
 
-from binding.analysis.sweep import Grid
+from binding.analysis.titration import Grid
 
 
 class PhaseDiagram(Base):
@@ -63,7 +63,6 @@ class PhaseDiagram(Base):
             cmax=(100, 100),
             Nc=(25, 25),
             **kwargs):
-
         """
         Plot expression dynamics for each cell type.
 
@@ -75,13 +74,16 @@ class PhaseDiagram(Base):
 
         # construct concentration grid and evaluate binding site occupancies
         grid = Grid(cmin=cmin, cmax=cmax, Nc=Nc)
-        occupancies = grid.get_occupancies(self.element, **kwargs)
+        if self.element is None:
+            model = grid.run_simple_model(**kwargs)
+        else:
+            model = grid.run_binding_model(self.element, **kwargs)
 
         # plot phase diagram
-        occupancies.plot_overall_occupancy('Pnt',
-                                           cmap=plt.cm.PiYG,
-                                           mask=True,
-                                           ax=self.fig.axes[0])
+        model.plot_overall_occupancy('Pnt',
+                                       cmap=plt.cm.PiYG,
+                                       mask=True,
+                                       ax=self.fig.axes[0])
 
     @staticmethod
     def _format_ax(ax):
@@ -151,8 +153,8 @@ class TitrationContours(PhaseDiagram):
 
         # construct concentration grid and evaluate binding site occupancies
         grid = Grid(cmin=(cmin, yan_level), cmax=(cmax, yan_level), Nc=(Nc, 1))
-        occupancies = grid.get_occupancies(self.element, **kwargs)
+        model = grid.run_binding_model(self.element, **kwargs)
 
         # plot titration contours
-        _ = occupancies.plot_contours(fixed=0, fig=self.fig)
+        _ = model.plot_contours(fixed=0, fig=self.fig)
 
