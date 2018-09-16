@@ -3,8 +3,8 @@ __author__ = 'Sebastian Bernasek'
 # cython: boundscheck=False
 # cython: wraparound=False
 # cython: profile=False
-from multiprocessing import Queue, Process
 
+from multiprocessing import Queue, Process
 from parallel cimport cSubprocess
 
 
@@ -12,6 +12,9 @@ cdef class cSubprocess:
     """ Interface to multiprocessing module for generating subprocesses. """
 
     def __init__(self):
+        """
+        Instantiate queue of subprocesses.
+        """
         self.processes = []
         self.queue = Queue()
 
@@ -22,7 +25,7 @@ cdef class cSubprocess:
         p.start()
 
     cdef list gather(self):
-        """ Returns unordered outputs once all subprocesses are complete. """
+        """ Return unordered outputs after all subprocesses are complete. """
 
         # compile results
         cdef list results = [self.queue.get() for p in self.processes]

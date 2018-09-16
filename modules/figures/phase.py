@@ -80,10 +80,9 @@ class PhaseDiagram(Base):
             model = grid.run_binding_model(self.element, **kwargs)
 
         # plot phase diagram
-        model.plot_overall_occupancy('Pnt',
-                                       cmap=plt.cm.PiYG,
-                                       mask=True,
-                                       ax=self.fig.axes[0])
+        model.plot_phase_diagram('Pnt',
+                                 cmap=plt.cm.PiYG,
+                                 ax=self.fig.axes[0])
 
     @staticmethod
     def _format_ax(ax):
@@ -156,5 +155,5 @@ class TitrationContours(PhaseDiagram):
         model = grid.run_binding_model(self.element, **kwargs)
 
         # plot titration contours
-        _ = model.plot_contours(fixed=0, fig=self.fig)
+        _ = model.plot_titration_contours(fixed=0, fig=self.fig)
 

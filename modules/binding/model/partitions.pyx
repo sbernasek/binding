@@ -20,10 +20,10 @@ cdef class cPF(cRoot):
     Defines a partition function for a given binding element.
 
     Attributes:
-        element (cElement instance) - binding site element of length Ns
-        max_depth (int) - maximum depth of tree (Ns)
-        Nc (int) - number of unique protein concentration pairs
-        cut_depth (int) - depth of parallel evaluation of subtrees
+    element (cElement instance) - binding site element of length Ns
+    max_depth (int) - maximum depth of tree (Ns)
+    Nc (int) - number of unique protein concentration pairs
+    cut_depth (int) - depth of parallel evaluation of subtrees
     """
 
     @staticmethod
@@ -88,9 +88,23 @@ cdef class cPF(cRoot):
 
 
 class PartitionFunction:
-    """ Defines a partition function that enumerates probabilities of all element microstates for a given set of protein concentrations. """
+    """
+    Object defines a partition function that enumerates probabilities of all element microstates for a given set of protein concentrations.
+
+    Attributes:
+    element (binding.model.elements.Element) - binding element
+    concentrations (np.ndarray[np.float64]) - protein concentrations, (Nc,n)
+    Nc (int) - number of unique protein concentration conditions
+    """
 
     def __init__(self, element, concentrations):
+        """
+        Instantiate partition function.
+
+        Args:
+        element (binding.model.elements.Element) - binding element
+        concentrations (np.ndarray[np.float64]) - concentrations, (Nc,n)
+        """
 
         # get system dimensions
         self.element = element
@@ -98,7 +112,15 @@ class PartitionFunction:
         self.Nc = concentrations.shape[0]
 
     def c_get_occupancies(self, cut_depth=None):
-        """ Get Ns x b x Nc occupancy array. """
+        """
+        Evaluate equilibrium fractional occupancies.
+
+        Args:
+        cut_depth (int) - depth at which parallel branching occurs
+
+        Returns:
+        occupancies (np.ndarray[np.float64]) - occupancy array, (Ns,b,Nc)
+        """
 
         # instantiate partition function
         c_pf = cPF.from_python(self.element, self.concentrations, cut_depth)

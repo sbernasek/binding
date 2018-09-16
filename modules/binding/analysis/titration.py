@@ -13,17 +13,26 @@ from binding.model.partitions import PartitionFunction
 
 
 class Grid:
-    """ Class defines a set of pairwise protein concentrations. """
+    """
+    Class defines a 2D grid of pairwise transcriptipn factor concentrations.
+
+    Attributes:
+    cmin (int or tuple) - minimum concentration for each substrate, nM
+    cmax (int or tuple) - maximum concentration for each substrate, nM
+    Nc (int or tuple) - number of concentrations for each substrate
+    names (dict) - {name: index} pairs for each substrate
+    Cx, Cy (np.ndarray[float], length Nc) - unique concentrations for each substrate, nM
+    concentrations (np.ndarray[float], shape 2 x (Nc^2) ) - unique substrate concentration pairs, nM
+    """
 
     def __init__(self, cmin=0, cmax=100, Nc=25, names=None):
 
         """
         Args:
-        cmin (int or tuple) - minimum concentration for each protein, nM
-        cmax (int or tuple) - maximum concentration for each protein, nM
-        Nc (int or tuple) - number of concentrations for each protein
-        names (dict[str]=int) - name for each binding protein
-
+        cmin (int or tuple) - minimum concentration for each substrate, nM
+        cmax (int or tuple) - maximum concentration for each substrate, nM
+        Nc (int or tuple) - number of concentrations for each substrate
+        names (dict) - {name: index} pairs for each substrate
         """
 
         # set names
@@ -32,9 +41,9 @@ class Grid:
         self.names = names
 
         # define concentrations
-        self.cmin = self.get_tuple(cmin)
-        self.cmax = self.get_tuple(cmax)
-        self.Nc = self.get_tuple(Nc)
+        self.cmin = self.make_tuple(cmin)
+        self.cmax = self.make_tuple(cmax)
+        self.Nc = self.make_tuple(Nc)
 
         # set concentrations
         self.Cx = np.linspace(self.cmin[0], self.cmax[0], self.Nc[0]) * 1E-9
@@ -43,7 +52,8 @@ class Grid:
         self.concentrations = np.stack((xx.T, yy.T)).reshape(2, -1).T
 
     @staticmethod
-    def get_tuple(x):
+    def make_tuple(x):
+        """ Convert standalone values to tuples. """
         if type(x) in (float, int, np.float64, np.int64):
             return (x, x)
         else:
@@ -51,26 +61,45 @@ class Grid:
 
     def run_binding_model(self, element, cut_depth=None):
         """
-        Evaluate binding site occupancies.
+        Evaluate binding site occupancies for a particular binding element.
 
         Args:
-        element (Element instance) - binding element
-        cut_depth (int) - depth at which parallel evaluation of subtrees occurs
+        element (binding.model.elements.Element instance) - binding element
+        cut_depth (int) - depth at which parallelization begins
         """
-        return BindingModel(element, cut_depth, cmin=self.cmin, cmax=self.cmax, Nc=self.Nc, names=self.names)
+        return BindingModel(element, cut_depth,
+                            cmin=self.cmin,
+                            cmax=self.cmax,
+                            Nc=self.Nc,
+                            names=self.names)
 
     def run_simple_model(self):
         """
         Evaluate binding site occupancies using a simple analytical model for two competing transcription factors.
         """
-        return SimpleModel(cmin=self.cmin, cmax=self.cmax, Nc=self.Nc, names=self.names)
+        return SimpleModel(cmin=self.cmin,
+                           cmax=self.cmax,
+                           Nc=self.Nc,
+                           names=self.names)
 
 
 class SimpleModel(Grid):
     """
-    Analytical solution of a competitive binding model.
-    """
+    Simple model describing the equilibrium surface coverage of sites bound by two competing transcription factor substrates. Analytical solution assumes no cooperativity exists within or between the two substrates.
 
+    Attributes:
+    theta_A, thetaB (np.ndarray[float], shape Nc x Nc) - surface coverage by substrates A and B
+    theta (np.ndarray[float], shape Nc x Nc) - total surface coverage
+
+    Inherited attributes:
+    cmin (int or tuple) - minimum concentration for each substrate, nM
+    cmax (int or tuple) - maximum concentration for each substrate, nM
+    Nc (int or tuple) - number of concentrations for each substrate
+    names (dict) - {name: index} pairs for each substrate
+    Cx, Cy (np.ndarray[float], length Nc) - unique concentrations for each substrate, nM
+    concentrations (np.ndarray[float], shape 2 x (Nc^2) ) - unique substrate concentration pairs, nM
+
+    """
     def __init__(self, **kwargs):
         """
         Instantiate object for analytically evaluating equilibrium binding site occupancies for two competing transcription factors.
@@ -86,17 +115,10 @@ class SimpleModel(Grid):
         A, B = np.meshgrid(*(self.Cx, self.Cy), indexing='xy')
         self.evaluate_occupancies(A*1e9, B*1e9)
 
-    def evaluate_occupancies(self, A, B):
-        """ Evaluate fractional occupancies using analytical model. """
-        theta_A, theta_B = self.evaluate_fractional_coverage(A, B)
-        self.theta_A = theta_A
-        self.theta_B = theta_B
-        self.total_occupancy = theta_A + theta_B
-
     @staticmethod
-    def evaluate_fractional_coverage(A0=1, B0=1, S0=1, KdA=1, KdB=1):
+    def solve(A0=1, B0=1, S0=1, KdA=1, KdB=1):
         """
-        Analytically compute equilibrium surface coverages for a system with two competitive binding substrates.
+        Analytically compute equilibrium surface coverages for a system of two substrates competing for common binding sites.
 
         Args:
         A0, B0 (float) - initial total concentrations of substrates A and B
@@ -113,85 +135,126 @@ class SimpleModel(Grid):
         c = -KdA*KdB*S0
 
         # compute coverages
-        theta = np.arccos((-2*(a**3) + 9*a*b -27*c)/(2*np.sqrt(((a**2)-3*b)**3)))
-        AS = A0 * ((2*np.sqrt((a**2) - 3*b)*np.cos(theta/3)) - a) / (3*KdA + (2*np.sqrt((a**2) - 3*b)*np.cos(theta/3)) - a)
+        theta = np.arccos((-2*(a**3)+9*a*b -27*c)/(2*np.sqrt(((a**2)-3*b)**3)))
+        AS = A0 * ((2*np.sqrt((a**2)-3*b)*np.cos(theta/3))-a) / (3*KdA + (2*np.sqrt((a**2) - 3*b)*np.cos(theta/3)) - a)
         BS = B0 * ((2*np.sqrt((a**2) - 3*b)*np.cos(theta/3)) - a) / (3*KdB + (2*np.sqrt((a**2) - 3*b)*np.cos(theta/3)) - a)
         S = S0 - AS - BS
-
         return AS/S0, BS/S0
 
-    def plot_overall_occupancy(self,
-                               species='Pnt',
-                               mask=None,
-                               **kwargs):
-        """ Plot fraction occupancies for all substrate concentrations. """
+    def evaluate_occupancies(self, A, B):
+        """
+        Evaluate equilibrium surface coverage using analytical model.
 
-        # get total occupancy
-        if mask is not None:
-            mask = self.total_occupancy
+        Args:
+        A, B (np.ndarray[float] or float) - total substrate concentrations
+        """
+        theta_A, theta_B = self.solve(A, B)
+        self.theta_A = theta_A
+        self.theta_B = theta_B
+        self.theta = theta_A + theta_B
+
+    def plot_phase_diagram(self, species='pnt',  **kwargs):
+        """
+        Plot equilibrium surface coverage phase diagram.
+
+        Args:
+        species (str) - binding species
+        kwargs: keyword arguments for visualization
+
+        Returns:
+        ax (matplotlib.axes.AxesSubplot)
+        """
 
         # get fractional occupancies
         if species.lower() == 'total':
-            zz = self.total_occupancy
-        elif species.lower() == 'yan':
-            zz = self.theta_A
+            coverage = self.theta
         elif species.lower() == 'pnt':
-            zz = self.theta_B
+            coverage = self.theta_A
+        elif species.lower() == 'yan':
+            coverage = self.theta_B
         else:
             raise ValueError('Species not recognized.')
 
         # plot occupancies
-        ax = self.show(zz, mask=mask, **kwargs)
+        ax = self._plot_phase_diagram(coverage.T, self.theta, **kwargs)
+
+        self._format_ax(ax)
+
         return ax
 
-    def show(self, zz,
-             mask=None,
-             cmap=plt.cm.plasma,
-             vmin=0, vmax=1,
-             stretch=True,
-             bg_color=70,
-             figsize=(4, 4),
-             ax=None):
+    @staticmethod
+    def _plot_phase_diagram(substrate_coverage,
+                            total_coverage=None,
+                            cmap=plt.cm.PiYG,
+                            vmin=0, vmax=1,
+                            stretch=True,
+                            bg_color=70,
+                            ax=None):
+        """
+        Visualize equilibrium surface coverage phase diagram.
+
+        Args:
+        substrate_coverage (np.ndarray[float], Nc x Nc) - substrate coverage
+        total_coverage (np.ndarray[float], Nc x Nc) - total coverage
+        cmap (matplotlib.colors.ColorMap)
+        vmin, vmax (float) - bounds for colormap
+        stretch (bool) - if True, keep true aspect ratio
+        bg_color (np.uint8) - background fill color, defaults to grey
+        ax (matplotlib.axes.AxesSubplot)
+        kwargs: keyword arguments for visualization
+
+        Returns:
+        ax (matplotlib.axes.AxesSubplot)
+        """
 
         # create figure
         if ax is None:
-            fig, ax = plt.subplots(figsize=figsize)
+            fig, ax = plt.subplots(figsize=(2.5, 2.5))
 
-        # create image
+        # apply colormap to create image
         norm = Normalize(vmin, vmax)
-        im = cmap(norm(zz))
+        im = cmap(norm(substrate_coverage))
 
-        # apply mask as transparency
-        if mask is not None:
-            im[:, :, -1] = mask
-            bg = np.empty(zz.shape + (3,), dtype=np.uint8)
+        # mask total coverage using alpha channel (low areas are transparent)
+        if total_coverage is not None:
+            im[:, :, -1] = total_coverage
+            bg = np.empty(substrate_coverage.shape + (3,), dtype=np.uint8)
             bg.fill(bg_color)
             ax.imshow(bg)
 
-        # visualize occupancy
+        # render image
         ax.imshow(im)
-        #ax.imshow(zz, cmap=cmap, vmin=vmin, vmax=vmax)
-        ax.invert_yaxis()
-        ax.set_xlabel('Yan concentration (nM)')
-        ax.set_ylabel('Pnt concentration (nM)')
-
-        # format ticks
-        self.format_ticks(ax, stretch=stretch)
 
         return ax
 
-    def format_ticks(self, ax, format_x=True, format_y=True, stretch=True):
+    def _format_ax(self, ax, stretch=True):
+        """
+        Format axis labels, orientation, and tickmarks.
 
-        if format_x:
-            xtx = np.linspace(0, self.Cx.max(), 5)
-            tick_positions = np.interp(xtx, self.Cx, np.arange(self.Cx.size))
-            ax.set_xticks(tick_positions)
-            ax.set_xticklabels(['{:.0f}'.format(x) for x in xtx*1e9])
-        if format_y:
-            ytx = np.linspace(0, self.Cy.max(), 5)
-            tick_positions = np.interp(ytx, self.Cy, np.arange(self.Cy.size))
-            ax.set_yticks(tick_positions)
-            ax.set_yticklabels(['{:.0f}'.format(x) for x in ytx*1e9])
+        Args:
+        ax (matplotlib.axes.AxesSubplot)
+        stretch (bool) - if True, keep true aspect ratio
+        """
+
+        # invert axes
+        ax.invert_yaxis()
+
+        # label axes
+        index_to_name = {v:k for k,v in self.names.items()}
+        ax.set_xlabel('{:s} concentration (nM)'.format(index_to_name[2]))
+        ax.set_ylabel('{:s} concentration (nM)'.format(index_to_name[1]))
+
+        # format xticks
+        xtx = np.linspace(0, self.Cx.max(), 5)
+        tick_positions = np.interp(xtx, self.Cx, np.arange(self.Cx.size))
+        ax.set_xticks(tick_positions)
+        ax.set_xticklabels(['{:.0f}'.format(x) for x in xtx*1e9])
+
+        # format yticks
+        ytx = np.linspace(0, self.Cy.max(), 5)
+        tick_positions = np.interp(ytx, self.Cy, np.arange(self.Cy.size))
+        ax.set_yticks(tick_positions)
+        ax.set_yticklabels(['{:.0f}'.format(x) for x in ytx*1e9])
 
         # set aspect ratio
         if stretch:
@@ -203,12 +266,14 @@ class SimpleModel(Grid):
 
 class BindingModel(SimpleModel):
     """
-    Object containing equilibrium binding site occupancies of a binding element for all pairwise concentrations in a concentration grid.
+    Statistical mechanical model describing the equilibrium fractional occupancy of predefined regulatory elements bound by one or more competing transcription factor substrates. Numerical solution entails full enumeration of all microstates.
+
+    This object contains equilibrium fractional occupancies of a binding element for all pairwise concentrations in a concentration grid.
     """
 
     def __init__(self, element, cut_depth=None, **kwargs):
         """
-        Instantiate object for evaluating equilibrium binding site occupancies.
+        Instantiate 2D phase diagram.
 
         Args:
         element (binding.model.elements.Element) - binding element
@@ -227,99 +292,107 @@ class BindingModel(SimpleModel):
         self.evaluate_occupancies(element, cut_depth=cut_depth)
 
     def evaluate_occupancies(self, element, cut_depth=None):
-        """ Get Ns x Nc x b occupancy array. """
-        pf = PartitionFunction(element, self.concentrations)
-        occupancies = pf.c_get_occupancies(cut_depth)
-        self.occupancies = np.swapaxes(occupancies, 1, 2)
-        self.total_occupancy = self.occupancies[:,:,1:].sum(axis=-1)
-        self.ets = np.array([i for i, x in enumerate(element.ets) if x == 1]).reshape(-1, 1)
-        self.Ns = element.Ns
-        self.fit_model()
-
-    def plot_occupancy(self, site=0, species='Pnt', **kwargs):
-        """ Plot occupancy for an individual binding site. """
-        if species.lower() == 'total':
-            zz = 1 - self.occupancies[site, :, 0].reshape(*self.Nc)
-        else:
-            zz = self.occupancies[site, :, self.names[species]].reshape(*self.Nc)
-
-        ax = self.show(zz, **kwargs)
-        fig = plt.gcf()
-        fig.suptitle('Site N={:d}'.format(site), fontsize=9)
-        return ax
-
-    def plot_overall_occupancy(self,
-                               species='Pnt',
-                               mask=None,
-                               title=False,
-                               **kwargs):
-        """ Plot overall occupancy across the entire element. """
-
-        # get total occupancy
-        total = 1 - self.occupancies[:, :, 0].mean(axis=0).reshape(*self.Nc)
-        if mask is not None:
-            mask = total.T
-
-        if species.lower() == 'total':
-            zz = total
-        else:
-            zz = self.occupancies[:, :, self.names[species]].mean(axis=0).reshape(*self.Nc)
-
-        ax = self.show(zz, mask=mask, **kwargs)
-        if title:
-            fig = plt.gcf()
-            fig.suptitle('Over all sites', fontsize=9)
-        return ax
-
-    def plot_mapping(self, func, title=None, **kwargs):
         """
-        Visualizes mapping applied to Pnt and Yan occupancy.
+        Evaluate partition function to construct Ns x Nc x b occupancy array.
 
         Args:
-            func (function(pnt, yan)) - function applied to pnt/yan occupancy
-            title (str) - figure suptitle
+        element (binding.model.elements.Element) - binding element
+        cut_depth (int) - tree depth at which paralellization begins
+        """
+
+        # evaluate partition function
+        pf = PartitionFunction(element, self.concentrations)
+        occupancies = pf.c_get_occupancies(cut_depth)
+
+        # store fraction occupancies
+        self.occupancies = np.swapaxes(occupancies, 1, 2)
+        self.total_occupancy = self.occupancies[:,:,1:].sum(axis=-1)
+
+        # store overall surface coverage
+        self.theta = 1-self.occupancies[:, :, 0].mean(axis=0).reshape(*self.Nc)
+
+        # store binding element ETS site positions
+        ets_sites = [i for i, x in enumerate(element.ets) if x == 1]
+        self.ets = np.array(ets_sites).reshape(-1, 1)
+        self.Ns = element.Ns
+
+        # fit hill functional form to titration contours
+        self.fit_hill()
+
+    def plot_phase_diagram(self, species='Pnt', **kwargs):
+        """
+        Plot equilibrium surface coverage phase diagram.
+
+        Args:
+        species (str) - binding species
+        kwargs: keyword arguments for visualization
+
+        Returns:
+        ax (matplotlib.axes.AxesSubplot)
+        """
+
+        # get substrate coverage
+        if species.lower() == 'total':
+            substrate_coverage = self.theta
+        else:
+            occupancies = self.occupancies[:, :, self.names[species]]
+            substrate_coverage = occupancies.mean(axis=0).reshape(*self.Nc)
+
+        # plot phase diagram
+        ax = self._plot_phase_diagram(substrate_coverage, self.theta, **kwargs)
+
+        # format axis
+        self._format_ax(ax)
+
+        return ax
+
+    def plot_phase_map(self, func, **kwargs):
+        """
+        Visualizes function applied to phase diagram.
+
+        Args:
+        func (function(pnt, yan)) - function applied to pnt/yan occupancy
+        kwargs: keyword arguments for phase diagram
         """
 
         # get occupancy by each species
-        pnt = self.occupancies[:, :, self.names['Pnt']].mean(axis=0).reshape(*self.Nc)
-        yan = self.occupancies[:, :, self.names['Yan']].mean(axis=0).reshape(*self.Nc)
+        pnt = self.occupancies[:, :, self.names['Pnt']].mean(axis=0)
+        pnt = pnt.reshape(*self.Nc)
+        yan = self.occupancies[:, :, self.names['Yan']].mean(axis=0)
+        yan = yan.reshape(*self.Nc)
 
         # plot function output
-        ax = self.show(func(pnt, yan).T, **kwargs)
-        if title is not None:
-            fig = plt.gcf()
-            fig.suptitle(title, fontsize=9)
+        ax = self._plot_phase_diagram(func(pnt, yan).T, **kwargs)
+
         return ax
 
-    def plot_colorbar(figsize=(5, 1), vmin=0, vmax=1, cmap=plt.cm.plasma):
-
-        fig, ax_cbar = plt.subplots(figsize=figsize)
-        norm = Normalize(vmin, vmax)
-        cbar = ColorbarBase(ax_cbar, cmap=cmap, norm=norm, orientation='horizontal')
-        ax_cbar.xaxis.set_ticks_position('top')
-        cbar.set_ticks(np.arange(0, 1.1, .2))
-        ax_cbar.tick_params(labelsize=7, pad=1)
-        label = 'Occupancy'
-        if name is not None:
-            label = label + ' ({:s})'.format(name)
-        cbar.set_label(label, fontsize=8, labelpad=5)
-        #ax_cbar.xaxis.set_major_formatter(FormatStrFormatter('%2.0f'))
-        return fig
-
-    def plot_contours(self,
+    def plot_titration_contours(self,
                       species='Pnt',
                       variable='Pnt',
                       fixed=0,
                       cmap=plt.cm.viridis,
-                      fig=None,
-                      figsize=(4, 4)):
+                      fig=None):
+        """
+        Plot titration contours.
 
-        # get data
+        Args:
+        species (str) - binding substrate whose surface coverage is shown
+        variable (str) - titrated substrate
+        fixed (int) - concentration index of non-titrated substrate
+        cmap (matplotlib.colors.ColorMap)
+        fig (matplotlib.figures.Figure)
+
+        Returns:
+        fig (matplotlib.figures.Figure)
+        """
+
+        # determine species indices
         species_dim = self.names[species]
         variable_dim = self.names[variable]-1
         N = self.occupancies.shape[0]
-        if variable_dim == 0:
 
+        # get titration data
+        if variable_dim == 0:
             occupancy = self.occupancies[:, :, species_dim].reshape(N, *self.Nc)[:, :, fixed]
             concentration = self.concentrations[:, variable_dim].reshape(*self.Nc)[:, fixed] * 1e9
             fixed_concentration = self.concentrations[:, 1].reshape(*self.Nc)[0, fixed] * 1e9
@@ -330,34 +403,31 @@ class BindingModel(SimpleModel):
             fixed_concentration = self.concentrations[:, 0].reshape(*self.Nc)[fixed, 0] * 1e9
             fixed_species = 'Pnt'
 
-        # create figure
-        if fig is None:
-            fig = plt.figure(figsize=figsize)
-        gs = gridspec.GridSpec(nrows=2, ncols=1, height_ratios=(1, 8), hspace=0.15)
+        # create figure with vinding site positions
+        fig = self.create_titration_figure(fig=fig, cmap=cmap)
         fig.suptitle('Fixed {:0.1f} nM {:s}'.format(fixed_concentration, fixed_species), fontsize=9)
+        ax0, ax1 = fig.axes
 
         # calculate distance to nearest ets site
-        proximity = distance_matrix(np.arange(N).reshape(-1, 1), self.ets).min(axis=1)
+        prx = distance_matrix(np.arange(N).reshape(-1,1),self.ets).min(axis=1)
 
-        # visualize binding sites, colored by proximity to ets site
-        ax0 = plt.subplot(gs[0])
-        ax0.imshow(proximity.reshape(1,-1), cmap=cmap, aspect=1, interpolation='none')
+        # visualize binding sites colored by proximity to ets site
+        ax0.imshow(prx.reshape(1,-1), cmap=cmap, aspect=1,interpolation='none')
+        for site_index in self.ets:
+            ax0.text(site_index, 0, 'E', color='w', ha='center', va='center')
+
+        # format axis
         ax0.grid(color='k', linestyle='-', linewidth=2)
         ax0.set_yticks([])
         ax0.xaxis.set_ticks_position('top')
         ax0.set_xticks(np.arange(N)-0.5)
         ax0.set_xticklabels([])
-        ax0.tick_params(labelsize=8, pad=0, length=0, width=0.5)
-
-        # add ETS sites
-        for site_index in self.ets:
-            ax0.text(site_index, 0, 'E', fontsize=8, color='w', ha='center', va='center')
+        ax0.tick_params(length=0, width=0.5)
 
         # plot occupancy contours
-        ax1 = plt.subplot(gs[1])
-        norm = Normalize(vmin=0, vmax=proximity.max())
+        norm = Normalize(vmin=0, vmax=prx.max())
         for i, x in enumerate(occupancy):
-            color = cmap(norm(proximity[i]))
+            color = cmap(norm(prx[i]))
             ax1.plot(concentration, x, '-', color=color)
 
         ax1.set_ylim(0, 1)
@@ -367,84 +437,46 @@ class BindingModel(SimpleModel):
 
         return fig
 
-    def create_figure(self, variable='Pnt', fixed=0, cmap=plt.cm.viridis, figsize=(4, 4)):
+    def create_titration_figure(self, fig=None, cmap=plt.cm.viridis):
+        """
+        Create titration figure.
 
-        # create figure
-        fig = plt.figure(figsize=figsize)
-        gs = gridspec.GridSpec(nrows=2, ncols=1, height_ratios=(1, 8), hspace=0.15)
+        Args:
+        fig (matplotlib.figures.Figure)
+        cmap (matplotlib.colors.ColorMap)
 
-        # label fixed species
-        variable_dim = self.names[variable]-1
-        if variable_dim == 0:
-            fixed_concentration = self.concentrations[:, 1].reshape(*self.Nc)[0, fixed] * 1e9
-            fixed_species = 'Yan'
-        elif variable_dim == 1:
-            fixed_concentration = self.concentrations[:, 0].reshape(*self.Nc)[fixed, 0] * 1e9
-            fixed_species = 'Pnt'
-        fig.suptitle('Fixed {:0.1f} nM {:s}'.format(fixed_concentration, fixed_species), fontsize=9)
+        Returns:
+        fig (matplotlib.figures.Figure)
+        """
 
-        # calculate distance to nearest ets site
-        sites = np.arange(self.Ns)
-        proximity = distance_matrix(sites.reshape(-1, 1), self.ets).min(axis=1)
-        norm = Normalize(vmin=0, vmax=proximity.max())
+        # instantiate figure figure
+        if fig is None:
+            fig = plt.figure(figsize=(4, 4))
 
-        # visualize binding sites, colored by proximity to ets site
+        # define grid specifications
+        gs = gridspec.GridSpec(nrows=2, ncols=1, height_ratios=(1, 8), hspace=.15)
         ax0 = plt.subplot(gs[0])
-        ax0.imshow(proximity.reshape(1,-1), cmap=cmap, aspect=1, interpolation='none')
-        ax0.grid(color='k', linestyle='-', linewidth=2)
-        ax0.set_yticks([])
-        ax0.xaxis.set_ticks_position('top')
-        ax0.set_xticks(sites-0.5)
-        ax0.set_xticklabels([])
-        ax0.tick_params(labelsize=8, pad=0)
-
-        # add ETS sites
-        for site_index in self.ets:
-            ax0.text(site_index, 0, 'E', fontsize=8, color='w', ha='center', va='center')
-
-        # create main axis
         ax1 = plt.subplot(gs[1])
-        ax1.set_ylim(0, 1)
-        if variable_dim == 0:
-            ax1.set_xlim(self.Cx.min()*1e9, self.Cx.max()*1e9)
-        else:
-            ax1.set_xlim(self.Cy.min()*1e9, self.Cy.max()*1e9)
 
-        ax1.set_ylabel('Occupancy ({:s})'.format(variable), fontsize=8)
-        ax1.set_xlabel('{:s} concentration (nM)'.format(variable), fontsize=8)
+        return fig
 
-        return fig, cmap, norm
-
-    def add_contour(self, ax, species='Pnt', variable='Pnt', fixed=0, overall=True, color='r', **kwargs):
-
-        # get data
-        species_dim = self.names[species]
-        variable_dim = self.names[variable]-1
-        N = self.occupancies.shape[0]
-        if variable_dim == 0:
-            occupancy = self.occupancies[:, :, species_dim].reshape(N, *self.Nc)[:, :, fixed]
-            concentration = self.concentrations[:, variable_dim].reshape(*self.Nc)[:, fixed] * 1e9
-        elif variable_dim == 1:
-            occupancy = self.occupancies[:, :, species_dim].reshape(N, *self.Nc)[:, fixed, :]
-            concentration = self.concentrations[:, variable_dim].reshape(*self.Nc)[fixed, :] * 1e9
-
-        # plot occupancy contour(s)
-        if overall:
-            ax.plot(concentration, occupancy.mean(axis=0), '-', color=color)
-        else:
-            for i, x in enumerate(occupancy):
-                ax1.plot(concentration, x, '-', color=color)
-
-        return ax
-
-    def fit_model(self, **kwargs):
+    def fit_hill(self, **kwargs):
         """ Fit HillModel to occupancies. """
         occupancies = self.occupancies.mean(axis=0)[:, 1:]
         concentrations = self.concentrations * 1e9
         self.model = HillModel(concentrations, occupancies, **kwargs)
 
-    def show_model(self, cmap=plt.cm.plasma, figsize=(4, 3)):
-        """ Visualize HillModel fit. """
+    def plot_hill_fit(self, cmap=plt.cm.plasma, figsize=(3, 2)):
+        """
+        Visualize Hill functional fit to all titration contours.
+
+        Args:
+        cmap (matplotlib.colors.ColorMap) - contour colors
+        figsize (tuple) - figure size
+
+        Returns:
+        fig (matplotlib.figures.Figure)
+        """
 
         norm = Normalize(0, self.Nc[1])
 
@@ -470,6 +502,4 @@ class BindingModel(SimpleModel):
         ax.spines['right'].set_visible(False)
         ax.set_xlim(self.model.x[:, 0].min(), self.model.x[:, 0].max())
         return fig
-
-
 

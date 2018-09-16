@@ -21,14 +21,14 @@ cdef class cTree:
     Defines a ternary tree that may be traversed sequentially.
 
     Attributes:
-        element (cElement instance) - binding site element of length Ns
-        max_depth (int) - maximum depth of tree (Ns)
-        Nc (int) - number of unique protein concentration pairs
-        C (double*) - protein concentrations, flattened N x Nc
-        weights (double*) - boltzmann weights, flattened array
-        degeneracy (double*) - degeneracy terms, flattened (Ns+1) x Nc
-        occupancies (double*) - binding site occupancies, flattened Ns x N x Nc
-        Z (double*) - partition function values, 1 x Nc array
+    element (cElement instance) - binding site element of length Ns
+    max_depth (int) - maximum depth of tree (Ns)
+    Nc (int) - number of unique protein concentration pairs
+    C (double*) - protein concentrations, flattened N x Nc
+    weights (double*) - boltzmann weights, flattened array
+    degeneracy (double*) - degeneracy terms, flattened (Ns+1) x Nc
+    occupancies (double*) - binding site occupancies, flattened Ns x N x Nc
+    Z (double*) - partition function values, 1 x Nc array
 
     Notes:
         - all memory is allocated upon instantiation
@@ -422,10 +422,10 @@ cdef class cRoot(cTree):
     Extension of cTree allowing parallel traversal of subtrees (leaves).
 
     Attributes:
-        cut_depth (int) - depth at which parallel evaluation of subtrees occurs
-        num_leaves (int) - number of leaves to be run in parallel
-        leaf_index (int) - counter for tracking leaves
-        oshift (int) - index by which leaf occupancies are shifted
+    cut_depth (int) - depth at which parallel evaluation of subtrees occurs
+    num_leaves (int) - number of leaves to be run in parallel
+    leaf_index (int) - counter for tracking leaves
+    oshift (int) - index by which leaf occupancies are shifted
     """
 
     def __cinit__(self, *args, int cut_depth=0):
@@ -618,9 +618,7 @@ cdef class cRoot(cTree):
     @cython.boundscheck(False)
     @cython.wraparound(False)
     cdef void evaluate_leaves(self):
-        """
-        Evaluate all leaves as parallel subprocesses.
-        """
+        """ Evaluate all leaves as parallel subprocesses. """
         cdef cTree leaf
         cdef cSubprocess sp
 
@@ -658,11 +656,11 @@ cpdef cTree rebuild_tree(tuple init_attr, tuple buffer_attr):
     Rebuild cTree instance from pickled attributes.weights
 
     Args:
-        init_attr (tuple) - tree instantiation attributes
-        buffer_attr (tuple) - tree array attributes
+    init_attr (tuple) - tree instantiation attributes
+    buffer_attr (tuple) - tree array attributes
 
     Returns:
-        tree (cTree instance)
+    tree (cTree instance)
     """
     cdef int i, d_shape, w_shape, o_shape
     cdef cTree tree

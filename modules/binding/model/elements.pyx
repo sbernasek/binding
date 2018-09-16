@@ -16,6 +16,21 @@ from elements cimport cElement
 
 
 cdef class cElement:
+    """
+    Object represents a binding element.
+
+    Attributes:
+    R (float) - gas constant
+    T (float) - temperature
+    b (int) - number of binding states (n+1)
+    n (int) - number of binding species
+    Ns (int) - number of binding sites
+    Nm (int) - number of microstates
+    alpha (array, length n) - binding energies to strong sites
+    beta (array, length n) - binding energies to weak sites
+    gamma (array, length n) -  polymerization energies
+    ets (array, length Ns) - boolean array denoting strong sites
+    """
 
     def __init__(self,
                  int Ns,
@@ -46,6 +61,7 @@ cdef class cElement:
         self.ets = ets
 
     cdef void set_params(self, dict params, int scale):
+        """ Set binding energies. """
         cdef int index
         cdef double nRT = -1/(self.R*self.T)
 
@@ -92,7 +108,10 @@ cdef class cElement:
 
 
 cdef class cRecursiveElement(cElement):
-    """ Equivalent version in which arrays are ordered by L/R traversal. """
+    """
+    Equivalent version in which arrays are ordered by L/R traversal of binding site positions.
+    """
+
     def __init__(self, *args):
         cElement.__init__(self, *args)
         self.reset()
@@ -151,6 +170,10 @@ cdef class cRecursiveElement(cElement):
 
 
 cdef class cIterativeElement(cElement):
+    """
+    Equivalent version in which microstates are ordered by their base-b representation.
+    """
+
     def __init__(self, *args):
         cElement.__init__(self, *args)
         self.reset()
@@ -224,11 +247,21 @@ cdef class cIterativeElement(cElement):
 
 
 class Element:
+    """
+    Class defines a single element bound by one or more proteins.
 
-    """ Class defines a single element bound by one or more proteins. """
+    Attributes:
+    Ns (int) - number of binding sites
+    b (int) - number of binding states (n+1)
+    n (int) - number of binding species
+    Nm (int) - number of microstates
+    params (dict[param]=tuple) - parameter values, e.g. alpha, beta, gamma
+    ets (array, length Ns) - boolean array denoting strong sites
+    """
 
     def __init__(self, Ns, N_species=2, params=None, ets=(0,)):
         """
+        Instantiate binding element.
 
         Args:
         Ns (int) - number of binding sites
