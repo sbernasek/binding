@@ -1,6 +1,6 @@
 *.txt
 profiling/*
-modules/build/*
+binding/build/*
 *.pyc
 *.pptx
 *.c
