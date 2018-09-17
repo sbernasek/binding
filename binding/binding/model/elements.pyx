@@ -11,7 +11,8 @@ from array import array
 from cpython.array cimport array, clone
 from libc.math cimport exp
 
-from bits cimport get_ternary_repr, c_bits_to_int
+from bits cimport get_ternary_repr
+from binding.model.bits cimport get_ternary_repr, c_bits_to_int
 from elements cimport cElement
 
 
