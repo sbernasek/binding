@@ -1,5 +1,5 @@
 binding.egg-info/
-binding/build/
+build/
 *.pyc
 *.c
 *.so
