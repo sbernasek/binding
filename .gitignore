@@ -1,10 +1,6 @@
-*.txt
-profiling/*
-binding/build/*
+binding.egg-info/
+binding/build/
 *.pyc
-*.pptx
 *.c
 *.so
 *.h
-notebooks/.ipynb_checkpoints/*
-*.npy
