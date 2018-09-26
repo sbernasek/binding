@@ -1,6 +1,6 @@
 
 Binding Overview
-===========
+================
 
 Binding provides a framework for calculating the equilibrium fractional occupancy of a DNA binding element by one or more transcription factors. In general, these calculations entail enumerating the statistical frequencies of all possible system microstates, where an individual microstate corresponds to a specific configuration of adjacent bound and unbound sites. For a detailed description of the modeling framework, please refer to our [study](https://github.com/sebastianbernasek/pnt_yan_ratio) of Pnt and Yan expression in the *Drosophila* eye.
 
@@ -9,24 +9,40 @@ In principle, the underlying model implementation places no hard constraints on 
 
 
 Installation
-=========
+============
 
-After downloading the [latest distribution](https://github.com/sebastianbernasek/binding/archive/v0.1.0-beta.tar.gz), the simplest method is to install via ``pip``:
+First, download the [latest distribution](https://github.com/sebastianbernasek/binding/archive/v0.1-beta.tar.gz).
 
-    pip install binding-0.1.0-beta.tar.gz
+Before attempting to install the binding model, make sure you have installed all necessary dependencies.
+
+
+System Requirements
+-------------------
+
+ - Python 3.6+
+ - [NumPy](https://www.scipy.org/): ``pip install numpy``
+ - [Cython](http://cython.org/): ``pip install cython`` (optional)
+
+
+Install Binding
+---------------
+
+The simplest method is to install via ``pip``:
+
+    pip install binding-0.1-beta.tar.gz
 
 The core model is implemented in cython, with the relevant extension modules residing in ``binding/model/*.pyx`` and ``binding/model/*.pxd``. These extension modules must be compiled prior to runtime. Upon installation of ``binding``, the package installer will attempt to use a local cython installation to compile the extension modules. If no cython installation is found, pre-compiled versions are automatically imported from the ``binding`` source distribution. Note that compilation has only been tested in macOS.
 
 To manually compile the binding package, unpack the tarball and build inplace:
 
-    tar -xzf binding-0.1.0-beta.tar.gz
-    cd binding-0.1.0-beta
+    tar -xzf binding-0.1-beta.tar.gz
+    cd binding-0.1-beta
     python setup.py build_ext --inplace
 
 
 
 Binding Modules
-=========
+===============
 
 Binding consists of a core model supported by several additional tools.
 
@@ -50,7 +66,7 @@ The supporting python modules include:
 
 
 Example Usage
-=========
+=============
 
 Define transcription factor binding energies:
 
@@ -96,8 +112,7 @@ Evaluate equilibrium binding site occupancies or a range of TF concentrations:
     occupancies = pf.c_get_occupancies()
 
 
-
 Further Examples
--------------
+----------------
 
 For an additional usage example, please refer to Figure 3 of our [study](https://github.com/sebastianbernasek/pnt_yan_ratio) of Pnt and Yan expression in the *Drosophila* eye.
