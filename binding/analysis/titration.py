@@ -37,7 +37,7 @@ class Grid:
 
         # set names
         if names is None:
-            names = dict(none=0, Pnt=1, Yan=2)
+            names = dict(none=0, Yan=1, Pnt=2)
         self.names = names
 
         # define concentrations
@@ -49,7 +49,8 @@ class Grid:
         self.Cx = np.linspace(self.cmin[0], self.cmax[0], self.Nc[0]) * 1E-9
         self.Cy = np.linspace(self.cmin[1], self.cmax[1], self.Nc[1]) * 1E-9
         xx, yy = np.meshgrid(*(self.Cx, self.Cy), indexing='xy')
-        self.concentrations = np.stack((xx.T, yy.T)).reshape(2, -1).T
+
+        self.concentrations = np.vstack((xx.ravel(), yy.ravel())).T
 
     @staticmethod
     def make_tuple(x):
@@ -241,8 +242,8 @@ class SimpleModel(Grid):
 
         # label axes
         index_to_name = {v:k for k,v in self.names.items()}
-        ax.set_xlabel('{:s} concentration (nM)'.format(index_to_name[2]))
-        ax.set_ylabel('{:s} concentration (nM)'.format(index_to_name[1]))
+        ax.set_xlabel('{:s} concentration (nM)'.format(index_to_name[1]))
+        ax.set_ylabel('{:s} concentration (nM)'.format(index_to_name[2]))
 
         # format xticks
         xtx = np.linspace(0, self.Cx.max(), 5)
@@ -362,7 +363,7 @@ class BindingModel(SimpleModel):
         yan = yan.reshape(*self.Nc)
 
         # plot function output
-        ax = self._plot_phase_diagram(func(pnt, yan).T, **kwargs)
+        ax = self._plot_phase_diagram(func(yan, pnt).T, **kwargs)
 
         return ax
 
@@ -388,19 +389,20 @@ class BindingModel(SimpleModel):
 
         # determine species indices
         species_dim = self.names[species]
-        variable_dim = self.names[variable]-1
+        variable_dim = self.names[variable] - 1
         N = self.occupancies.shape[0]
 
         # get titration data
-        if variable_dim == 0:
-            occupancy = self.occupancies[:, :, species_dim].reshape(N, *self.Nc)[:, :, fixed]
-            concentration = self.concentrations[:, variable_dim].reshape(*self.Nc)[:, fixed] * 1e9
-            fixed_concentration = self.concentrations[:, 1].reshape(*self.Nc)[0, fixed] * 1e9
-            fixed_species = 'Yan'
-        elif variable_dim == 1:
+        if variable_dim == 1:
             occupancy = self.occupancies[:, :, species_dim].reshape(N, *self.Nc)[:, fixed, :]
             concentration = self.concentrations[:, variable_dim].reshape(*self.Nc)[fixed, :] * 1e9
             fixed_concentration = self.concentrations[:, 0].reshape(*self.Nc)[fixed, 0] * 1e9
+            fixed_species = 'Yan'
+
+        elif variable_dim == 0:
+            occupancy = self.occupancies[:, :, species_dim].reshape(N, *self.Nc)[:, :, fixed]
+            concentration = self.concentrations[:, variable_dim].reshape(*self.Nc)[:, fixed] * 1e9
+            fixed_concentration = self.concentrations[:, 1].reshape(*self.Nc)[0, fixed] * 1e9
             fixed_species = 'Pnt'
 
         # create figure with vinding site positions
@@ -466,40 +468,53 @@ class BindingModel(SimpleModel):
         concentrations = self.concentrations * 1e9
         self.model = HillModel(concentrations, occupancies, **kwargs)
 
-    def plot_hill_fit(self, cmap=plt.cm.plasma, figsize=(3, 2)):
+    def plot_hill_fit(self, 
+                      species='Pnt', 
+                      variable='Pnt', 
+                      cmap=plt.cm.plasma, 
+                      figsize=(3, 2)):
         """
         Visualize Hill functional fit to all titration contours.
 
         Args:
+        species (str) - binding substrate whose surface coverage is shown
+        variable (str) - titrated substrate
         cmap (matplotlib.colors.ColorMap) - contour colors
         figsize (tuple) - figure size
 
         Returns:
         fig (matplotlib.figures.Figure)
         """
-
-        norm = Normalize(0, self.Nc[1])
-
+        
+        # determine species indices
+        species_dim = self.names[species]
+        variable_dim = self.names[variable] - 1
+        
+        # determine number of concentrations
+        num_concentrations = self.Nc[not variable_dim]    
+        norm = Normalize(0, num_concentrations)
+        
+        # create figure
         fig, ax = plt.subplots(figsize=figsize)
 
         # iterate across yan concentrations
-        for y in range(0, self.Nc[1]):
+        for y in range(0, num_concentrations):
 
             # get concentrations
-            x = self.model.x[y::self.Nc[1], 0]
+            x = self.model.x[y::num_concentrations, variable_dim]
 
             # plot data and prediction
-            data = self.model.y[y::self.Nc[1], 0]
-            prediction = self.model.yp[y::self.Nc[1], 0]
+            data = self.model.y[y::num_concentrations, species_dim-1]
+            prediction = self.model.yp[y::num_concentrations, species_dim-1]
 
             color = cmap(norm(y))
             ax.plot(x, prediction, '-', color=color, linewidth=2)
             ax.scatter(x, data, c=color, s=50, marker=r'$\diamond$')
 
-        _ = ax.set_ylabel('Occupancy (Pnt)', fontsize=8)
-        _ = ax.set_xlabel('Pnt concentration (nM)', fontsize=8)
+        _ = ax.set_ylabel('{:s} Occupancy'.format(species), fontsize=8)
+        _ = ax.set_xlabel('{:s} concentration (nM)'.format(variable), fontsize=8)
         ax.spines['top'].set_visible(False)
         ax.spines['right'].set_visible(False)
-        ax.set_xlim(self.model.x[:, 0].min(), self.model.x[:, 0].max())
+        ax.set_xlim(self.model.x[:, variable_dim].min(), self.model.x[:, variable_dim].max())
         return fig
 
