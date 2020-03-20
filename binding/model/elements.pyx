@@ -326,7 +326,13 @@ class Element:
         else:
             fig = plt.gcf()
         ax.imshow(np.zeros((1, self.Ns)), aspect=1, interpolation='none', cmap=plt.cm.Greys)
+
+        # set grid color
         ax.grid(color=color, linestyle='-', linewidth=2)
+        for spine in ax.spines.values():
+            spine.set_color(color)
+
+        # format axis
         ax.set_yticks([])
         ax.xaxis.set_ticks_position('top')
         ax.set_xticks(np.arange(self.Ns)-0.5)
