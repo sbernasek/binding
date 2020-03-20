@@ -10,6 +10,7 @@ cimport numpy as np
 from array import array
 from cpython.array cimport array, clone
 from libc.math cimport exp
+import matplotlib.pyplot as plt
 
 from bits cimport get_ternary_repr
 from binding.model.bits cimport get_ternary_repr, c_bits_to_int
@@ -306,3 +307,34 @@ class Element:
             for j in range(self.b):
                 masks[:, j, k] = self.get_mask(j, k, indices)
         return masks
+
+    def show(self, color='k', width=3, fontsize=8, ax=None):
+        """
+        Visualize binding element as a simple 1-D grid.
+
+        Args:
+        color (str) - grid color
+        size (int) - figure width
+        fontsize (int) - font size for ETS signifier
+        ax (matplotlib.axis instance) - if None, create figure
+
+        Returns:
+        ax (matplotlib.axis instance)
+        """
+        if ax is None:
+            fig, ax = plt.subplots(figsize=(width, width/self.Ns))
+        else:
+            fig = plt.gcf()
+        ax.imshow(np.zeros((1, self.Ns)), aspect=1, interpolation='none', cmap=plt.cm.Greys)
+        ax.grid(color=color, linestyle='-', linewidth=2)
+        ax.set_yticks([])
+        ax.xaxis.set_ticks_position('top')
+        ax.set_xticks(np.arange(self.Ns)-0.5)
+        ax.set_xticklabels([])
+        ax.tick_params(length=0, width=0.5)
+
+        # add ETS signifier
+        for site_index in [i for i, x in enumerate(self.ets.tolist()) if x==1]:
+            ax.text(site_index, 0, 'E', color='k', ha='center', va='center', fontsize=fontsize, fontweight='bold')
+        return fig
+

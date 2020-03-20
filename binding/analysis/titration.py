@@ -571,4 +571,3 @@ class BindingModel(SimpleModel):
         ax.spines['right'].set_visible(False)
         ax.set_xlim(self.model.x[:, variable_dim].min(), self.model.x[:, variable_dim].max())
         return fig
-
