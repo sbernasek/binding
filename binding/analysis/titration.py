@@ -462,6 +462,60 @@ class BindingModel(SimpleModel):
 
         return fig
 
+    def plot_overall_titration_contour(self,
+                      species='Pnt',
+                      variable='Pnt',
+                      fixed=0,
+                      color='k',
+                      ax=None):
+        """
+        Plot titration contour averaged across all binding sites.
+
+        Args:
+        species (str) - binding substrate whose surface coverage is shown
+        variable (str) - titrated substrate
+        fixed (int) - concentration index of non-titrated substrate
+        color (str or tuple) - line color
+        ax (matplotlib.axis instance)
+
+        Returns:
+        ax (matplotlib.axis instance)
+        """
+
+        # determine species indices
+        species_dim = self.names[species]
+        variable_dim = self.names[variable] - 1
+        N = self.occupancies.shape[0]
+
+        # get titration data
+        if variable_dim == 1:
+            occupancy = self.occupancies[:, :, species_dim].reshape(N, *self.Nc)[:, fixed, :].mean(axis=0)
+            concentration = self.concentrations[:, variable_dim].reshape(*self.Nc)[fixed, :] * 1e9
+            fixed_concentration = self.concentrations[:, 0].reshape(*self.Nc)[fixed, 0] * 1e9
+            fixed_species = 'Yan'
+
+        elif variable_dim == 0:
+            occupancy = self.occupancies[:, :, species_dim].reshape(N, *self.Nc)[:, :, fixed].mean(axis=0)
+            concentration = self.concentrations[:, variable_dim].reshape(*self.Nc)[:, fixed] * 1e9
+            fixed_concentration = self.concentrations[:, 1].reshape(*self.Nc)[0, fixed] * 1e9
+            fixed_species = 'Pnt'
+
+        # create figure 
+        if ax is None:
+            fig, ax = plt.subplots()
+
+        # plot occupancy contours
+        ax.plot(concentration, occupancy, '-', color=color)
+        
+        # format axis
+        ax.set_ylim(0, 1)
+        ax.set_xlim(concentration.min(), concentration.max())
+        ax.set_ylabel('Occupancy ({:s})'.format(species), fontsize=8)
+        ax.set_xlabel('{:s} concentration (nM)'.format(variable), fontsize=8)
+        ax.set_title('Fixed {:0.1f} nM {:s}'.format(fixed_concentration, fixed_species), fontsize=9)
+
+        return ax
+
     def fit_hill(self, **kwargs):
         """ Fit HillModel to occupancies. """
         occupancies = self.occupancies.mean(axis=0)[:, 1:]
