@@ -11,7 +11,7 @@ In principle, the underlying model implementation places no hard constraints on 
 Installation
 ============
 
-First, download the [latest distribution](https://github.com/sebastianbernasek/binding/archive/v0.1.tar.gz).
+First, download the [latest distribution](https://github.com/sebastianbernasek/binding/archive/v0.2.tar.gz).
 
 Before attempting to install the binding model, make sure you have installed all necessary dependencies.
 
@@ -29,14 +29,14 @@ Install Binding
 
 The simplest method is to install via ``pip``:
 
-    pip install binding-0.1.tar.gz
+    pip install binding-0.2.tar.gz
 
 The core model is implemented in cython, with the relevant extension modules residing in ``binding/model/*.pyx`` and ``binding/model/*.pxd``. These extension modules must be compiled prior to runtime. Upon installation of ``binding``, the package installer will attempt to use a local cython installation to compile the extension modules. If no cython installation is found, pre-compiled versions are automatically imported from the ``binding`` source distribution. Note that compilation has only been tested in macOS.
 
 To manually compile the binding package, unpack the tarball and build inplace:
 
-    tar -xzf binding-0.1.tar.gz
-    cd binding-0.1
+    tar -xzf binding-0.2.tar.gz
+    cd binding-0.2
     python setup.py build_ext --inplace
 
 
