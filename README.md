@@ -115,4 +115,4 @@ Evaluate equilibrium binding site occupancies or a range of TF concentrations:
 Further Examples
 ----------------
 
-For an additional usage example, please refer to Figure 3 of our [study](https://github.com/sebastianbernasek/pnt_yan_ratio) of Pnt and Yan expression in the *Drosophila* eye.
+For an additional usage example, please refer to Figure 6 of our [study](https://github.com/sebastianbernasek/pnt_yan_ratio) of Pnt and Yan expression in the *Drosophila* eye.
