@@ -11,7 +11,7 @@ In principle, the underlying model implementation places no hard constraints on 
 Installation
 ============
 
-First, download the [latest distribution](https://github.com/sebastianbernasek/binding/archive/v0.2.tar.gz).
+First, download the [latest distribution](https://github.com/sbernasek/binding/archive/v0.3.tar.gz).
 
 Before attempting to install the binding model, make sure you have installed all necessary dependencies.
 
@@ -29,14 +29,14 @@ Install Binding
 
 The simplest method is to install via ``pip``:
 
-    pip install binding-0.2.tar.gz
+    pip install binding-0.3.tar.gz
 
 The core model is implemented in cython, with the relevant extension modules residing in ``binding/model/*.pyx`` and ``binding/model/*.pxd``. These extension modules must be compiled prior to runtime. Upon installation of ``binding``, the package installer will attempt to use a local cython installation to compile the extension modules. If no cython installation is found, pre-compiled versions are automatically imported from the ``binding`` source distribution. Note that compilation has only been tested in macOS.
 
 To manually compile the binding package, unpack the tarball and build inplace:
 
-    tar -xzf binding-0.2.tar.gz
-    cd binding-0.2
+    tar -xzf binding-0.3.tar.gz
+    cd binding-0.3
     python setup.py build_ext --inplace
 
 
@@ -115,4 +115,4 @@ Evaluate equilibrium binding site occupancies or a range of TF concentrations:
 Further Examples
 ----------------
 
-For an additional usage example, please refer to Figure 6 of our [study](https://github.com/sebastianbernasek/pnt_yan_ratio) of Pnt and Yan expression in the *Drosophila* eye.
+For an additional usage example, please refer to Figure 6 of our [study](https://github.com/sbernasek/pnt_yan_ratio) of Pnt and Yan expression in the *Drosophila* eye.
