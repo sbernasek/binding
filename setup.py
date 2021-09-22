@@ -239,7 +239,7 @@ if USE_CYTHON:
 
 setup(
     name = "binding",
-    version = '0.2',
+    version = '0.3',
     author = "Sebastian Bernasek",
     author_email = "sebastian@u.northwestern.edu",
     url = "https://github.com/sebastianbernasek/binding",
