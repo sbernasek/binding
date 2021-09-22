@@ -1,3 +1,5 @@
+[![DOI](https://zenodo.org/badge/136619621.svg)](https://zenodo.org/badge/latestdoi/136619621)
+
 
 Binding Overview
 ================
